@@ -1,0 +1,6 @@
+.env
+*.db
+suivi.csv
+*.pdf
+__pycache__/
+.venv/

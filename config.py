@@ -1,0 +1,83 @@
+"""Lecture de la configuration depuis le fichier .env.
+
+Toutes les valeurs personnelles (identifiants, critères de recherche) sont
+dans .env : le code n'a jamais besoin d'être modifié pour les changer.
+"""
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Dossier où se trouve ce fichier : tous les chemins relatifs partent d'ici.
+DOSSIER_PROJET = Path(__file__).resolve().parent
+
+
+@dataclass
+class Config:
+    gmail_adresse: str
+    gmail_mot_de_passe: str
+    dossier_imap: str
+    telegram_token: str
+    telegram_chat_id: str
+    prix_max: int
+    arrondissements: set
+    expediteurs: list
+    dossier_pdf: Path
+    intervalle_secondes: int
+    relance_heures: int
+    jours_historique: int
+    fichier_modele: Path
+    fichier_csv: Path
+    fichier_db: Path
+
+
+def _chemin(valeur: str) -> Path:
+    """Transforme un chemin relatif en chemin absolu (relatif au projet)."""
+    p = Path(valeur).expanduser()
+    return p if p.is_absolute() else DOSSIER_PROJET / p
+
+
+def _liste(valeur: str) -> list:
+    """'11, 14 ,15' -> ['11', '14', '15']"""
+    return [x.strip() for x in valeur.split(",") if x.strip()]
+
+
+def charger_config() -> Config:
+    """Charge .env puis construit l'objet Config (avec valeurs par défaut)."""
+    load_dotenv(DOSSIER_PROJET / ".env")
+    g = os.getenv
+    return Config(
+        gmail_adresse=g("GMAIL_ADRESSE", "").strip(),
+        # Google affiche le mot de passe d'application avec des espaces : on les retire.
+        gmail_mot_de_passe=g("GMAIL_MOT_DE_PASSE_APPLICATION", "").replace(" ", ""),
+        dossier_imap=g("DOSSIER_IMAP", "INBOX").strip(),
+        telegram_token=g("TELEGRAM_BOT_TOKEN", "").strip(),
+        telegram_chat_id=g("TELEGRAM_CHAT_ID", "").strip(),
+        prix_max=int(g("PRIX_MAX_CC", "900")),
+        arrondissements={int(x) for x in _liste(g("ARRONDISSEMENTS", "11,14,15,17,18"))},
+        expediteurs=_liste(g("EXPEDITEURS", "jinka,seloger,pap")),
+        dossier_pdf=_chemin(g("DOSSIER_PDF", "dossier.pdf")),
+        intervalle_secondes=int(g("INTERVALLE_SECONDES", "120")),
+        relance_heures=int(g("RELANCE_HEURES", "48")),
+        jours_historique=int(g("JOURS_HISTORIQUE", "2")),
+        fichier_modele=_chemin(g("FICHIER_MODELE", "templates.md")),
+        fichier_csv=_chemin(g("FICHIER_SUIVI", "suivi.csv")),
+        fichier_db=_chemin(g("FICHIER_DB", "annonces.db")),
+    )
+
+
+def verifier(cfg: Config, *champs: str) -> None:
+    """Arrête le programme avec un message clair si un identifiant manque."""
+    noms_env = {
+        "gmail_adresse": "GMAIL_ADRESSE",
+        "gmail_mot_de_passe": "GMAIL_MOT_DE_PASSE_APPLICATION",
+        "telegram_token": "TELEGRAM_BOT_TOKEN",
+        "telegram_chat_id": "TELEGRAM_CHAT_ID",
+    }
+    manquants = [noms_env[c] for c in champs if not getattr(cfg, c)]
+    if manquants:
+        raise SystemExit(
+            "Il manque dans le fichier .env : " + ", ".join(manquants)
+            + "\n(copiez .env.example en .env et remplissez-le, voir README.md)"
+        )
