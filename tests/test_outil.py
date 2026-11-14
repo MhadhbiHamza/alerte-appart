@@ -337,6 +337,30 @@ class TestCycleComplet(unittest.TestCase):
         self.assertIn("pas encore répondu", rappels[2][0][2])
         self.assertEqual(rappels[2][1]["boutons"][0][0][1], "postuler:7")
 
+    def test_mode_essai(self):
+        self.cfg.email_reponse = "moi@perso.fr"
+        main.boucle(self.cfg, self.db, une_fois=True)
+        avant = len(self.envoyes())
+        ids = self.db.passer_en_essai(2)   # les 2 dernières annonces écartées
+        self.assertEqual(len(ids), 2)
+        main.boucle(self.cfg, self.db, une_fois=True)
+        essais = self.envoyes()[avant:]
+        self.assertEqual(len(essais), 2)
+        self.assertIn("🧪 <b>ESSAI</b>", essais[0][0][2])
+        self.assertIn("moi@perso.fr", essais[0][0][2])
+        # boutons d'envoi présents même sans email d'annonceur
+        self.assertEqual(essais[0][1]["boutons"][0][0][1], f"postuler:{ids[0]}")
+        self.clics = [clic(1, f"postuler:{ids[0]}")]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        args = self.m["envoyer_email"].call_args[0]
+        self.assertEqual(args[2], "moi@perso.fr")          # jamais l'annonceur
+        self.assertTrue(args[3].startswith("[ESSAI] "))
+        self.assertEqual(self.db.annonce(ids[0])["statut"], "dossier envoyé (essai)")
+        # pas de rappel de relance pour les essais
+        self.db.db.execute("UPDATE annonces SET notifiee_le='2000-01-01T00:00:00'")
+        self.db.db.commit()
+        self.assertTrue(all(not r["essai"] for r in self.db.a_relancer(48)))
+
     def test_photos_refusees_par_telegram(self):
         self.m["envoyer_photos"].side_effect = RuntimeError("Bad Request: wrong file identifier")
         main.boucle(self.cfg, self.db, une_fois=True)

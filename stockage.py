@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS annonces (
     texte               TEXT,                  -- texte de l'annonce dans l'email (pour l'analyse)
     photos              TEXT,                  -- liste JSON des photos de l'email
     verdict             TEXT,                  -- 🟢 À saisir / 🟡 Correct / 🔴 Bof
-    note                REAL                   -- note globale sur 5
+    note                REAL,                  -- note globale sur 5
+    essai               INTEGER DEFAULT 0      -- 1 = annonce notifiée pour essayer (envois vers vous)
 );
 CREATE TABLE IF NOT EXISTS etat (              -- petites valeurs à retenir entre deux lancements
     cle    TEXT PRIMARY KEY,
@@ -59,7 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_lien ON annonces(lien_normalise);
 NOUVELLES_COLONNES = {
     "ville": "TEXT", "quartier": "TEXT", "colocation": "INTEGER DEFAULT 0", "photo": "TEXT",
     "message_id": "INTEGER", "statut": "TEXT", "candidature": "TEXT", "envoye_le": "TEXT",
-    "texte": "TEXT", "photos": "TEXT", "verdict": "TEXT", "note": "REAL",
+    "texte": "TEXT", "photos": "TEXT", "verdict": "TEXT", "note": "REAL", "essai": "INTEGER DEFAULT 0",
 }
 CHAMPS_MODIFIABLES = {"notifiee_le", "message_id", "statut", "candidature", "envoye_le", "brouillon", "verdict", "note"}
 
@@ -117,6 +118,17 @@ class Stockage:
             "SELECT * FROM annonces WHERE retenue=1 AND notifiee_le IS NULL ORDER BY id"
         ).fetchall()
 
+    def passer_en_essai(self, nombre: int) -> List[int]:
+        """Reprend les `nombre` dernières annonces écartées pour les notifier en mode essai."""
+        ids = [l[0] for l in self.db.execute(
+            "SELECT id FROM annonces WHERE retenue=0 AND prix_cc IS NOT NULL ORDER BY id DESC LIMIT ?",
+            (nombre,))]
+        self.db.executemany(
+            "UPDATE annonces SET retenue=1, essai=1, notifiee_le=NULL, raison='essai' WHERE id=?",
+            [(i,) for i in ids])
+        self.db.commit()
+        return sorted(ids)
+
     def prix_m2_zone(self, ville: str, colocation: bool, sauf_id: int) -> List[float]:
         """€/m² de toutes les annonces vues dans la zone (gardées ou non), même type."""
         lignes = self.db.execute(
@@ -161,7 +173,7 @@ class Stockage:
         limite = (datetime.now() - timedelta(hours=heures)).isoformat(timespec="seconds")
         return self.db.execute(
             "SELECT * FROM annonces WHERE retenue=1 AND notifiee_le IS NOT NULL AND notifiee_le <= ? "
-            "AND relance_envoyee=0 ORDER BY id",
+            "AND relance_envoyee=0 AND essai=0 ORDER BY id",
             (limite,),
         ).fetchall()
 

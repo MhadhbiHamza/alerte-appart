@@ -88,12 +88,20 @@ def preparer_candidature(cfg: Config, annonce):
     valeurs = modele.valeurs_annonce(annonce)
     valeurs["mon_email"] = cfg.email_reponse or cfg.gmail_adresse  # pour votre signature
     objet, message = modele.charger(cfg.fichier_modele, colocation=bool(annonce["colocation"]))
-    return modele.remplir(objet, valeurs), modele.remplir(message, valeurs)
+    objet = ("[ESSAI] " if annonce["essai"] else "") + modele.remplir(objet, valeurs)
+    return objet, modele.remplir(message, valeurs)
+
+
+def destinataire(cfg: Config, annonce) -> str:
+    """À qui envoyer la candidature : l'annonceur, ou VOUS-MÊME pour une annonce d'essai."""
+    if annonce["essai"]:
+        return cfg.email_reponse or cfg.gmail_adresse
+    return annonce["email_contact"] or ""
 
 
 def boutons_annonce(annonce) -> telegram.Boutons:
     id_ = annonce["id"]
-    if annonce["email_contact"]:
+    if annonce["email_contact"] or annonce["essai"]:
         return [[("✅ Postuler (envoyer le dossier)", f"postuler:{id_}")],
                 [("📝 Brouillon Gmail", f"brouillon:{id_}"), ("❌ Pas intéressé", f"refuser:{id_}")]]
     return [[("✅ J'ai postulé sur le site", f"postuler:{id_}"), ("❌ Pas intéressé", f"refuser:{id_}")]]
@@ -111,6 +119,9 @@ def message_telegram(cfg: Config, annonce, message: str, resume: analyse.Analyse
     e = telegram.echapper
     v = modele.valeurs_annonce(annonce)
     lignes = []
+    if annonce["essai"]:
+        lignes.append(f"🧪 <b>ESSAI</b> — cette annonce ne correspond pas à vos critères. « Postuler » et "
+                      f"« Brouillon » envoient à <b>{e(destinataire(cfg, annonce))}</b>, jamais à l'annonceur.\n")
     if annonce["ville"] in cfg.priorites:
         lignes.append("⭐ <b>ZONE PRIORITAIRE</b>")
     type_ = "👥 Colocation" if annonce["colocation"] else "🏠 Location (logement entier)"
@@ -137,10 +148,10 @@ def message_telegram(cfg: Config, annonce, message: str, resume: analyse.Analyse
         lignes.append(f"✉️ {e(annonce['email_contact'])}")
     if annonce["telephone"]:
         lignes.append(f"📞 {e(annonce['telephone'])}")
-    if annonce["email_contact"]:
+    if annonce["email_contact"] or annonce["essai"]:
         if cfg.dossier_pdf.is_file():
             lignes.append("\n<i>« Postuler » envoie tout de suite le message ci-dessous et votre dossier PDF "
-                          "à cette adresse.</i>")
+                          f"à {e(destinataire(cfg, annonce))}.</i>")
         else:
             lignes.append(f"\n⚠️ Dossier PDF introuvable ({e(cfg.dossier_pdf.name)}) : « Postuler » "
                           "n'enverra rien tant qu'il manque.")
@@ -233,33 +244,35 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
         _decision(cfg, db, annonce, clic, "pas intéressé", "", "❌ Pas intéressé", "Annonce classée.")
 
     elif action == "brouillon":
-        if not annonce["email_contact"]:
+        if not destinataire(cfg, annonce):
             telegram.repondre_clic(token, clic["id"], "Pas d'email pour cette annonce.")
             return
         objet, message = preparer_candidature(cfg, annonce)
         pdf = cfg.dossier_pdf if cfg.dossier_pdf.is_file() else None
         imap = gmail.connexion(cfg.gmail_adresse, cfg.gmail_mot_de_passe)
         try:
-            gmail.creer_brouillon(imap, cfg.gmail_adresse, annonce["email_contact"], objet, message, pdf,
+            gmail.creer_brouillon(imap, cfg.gmail_adresse, destinataire(cfg, annonce), objet, message, pdf,
                                   cfg.email_reponse, cfg.nom_expediteur)
         finally:
             imap.logout()
         _decision(cfg, db, annonce, clic, "brouillon créé", "brouillon Gmail",
                   "📝 Brouillon créé dans Gmail", "Brouillon créé : relisez-le dans Gmail puis envoyez-le.")
 
-    elif action == "postuler" and annonce["email_contact"]:
+    elif action == "postuler" and destinataire(cfg, annonce):
         if not cfg.dossier_pdf.is_file():
             telegram.repondre_clic(token, clic["id"], f"⚠️ Dossier PDF introuvable ({cfg.dossier_pdf.name}) : "
                                    "rien n'a été envoyé.", alerte=True)
             return
         objet, message = preparer_candidature(cfg, annonce)
-        gmail.envoyer_email(cfg.gmail_adresse, cfg.gmail_mot_de_passe, annonce["email_contact"],
+        a_qui = destinataire(cfg, annonce)
+        gmail.envoyer_email(cfg.gmail_adresse, cfg.gmail_mot_de_passe, a_qui,
                             objet, message, cfg.dossier_pdf, cfg.email_reponse, cfg.nom_expediteur)
         quand = maintenant()
         db.maj(annonce["id"], envoye_le=quand)
-        log.info("📨 Dossier envoyé à %s (annonce #%d)", annonce["email_contact"], annonce["id"])
-        _decision(cfg, db, annonce, clic, "dossier envoyé", f"email envoyé le {_date(quand)}",
-                  f"✅ Dossier envoyé le {_date(quand)}", f"Dossier envoyé à {annonce['email_contact']} ✅")
+        log.info("📨 Dossier envoyé à %s (annonce #%d%s)", a_qui, annonce["id"], ", essai" if annonce["essai"] else "")
+        essai = " (essai)" if annonce["essai"] else ""
+        _decision(cfg, db, annonce, clic, "dossier envoyé" + essai, f"email envoyé le {_date(quand)} à {a_qui}",
+                  f"✅ Dossier envoyé le {_date(quand)}{essai}", f"Dossier envoyé à {a_qui} ✅{essai}")
 
     elif action == "postuler":
         _decision(cfg, db, annonce, clic, "postulé", "sur le site",
@@ -299,7 +312,8 @@ def mettre_a_jour_csv(cfg: Config, db: Stockage) -> None:
             "source": a["source"],
             "verdict": a["verdict"] or "",
             "note": f"{a['note']:g}/5".replace(".", ",") if a["note"] else "",
-            "annonce": ("⭐ " if a["ville"] in cfg.priorites else "")
+            "annonce": ("🧪 ESSAI – " if a["essai"] else "")
+                       + ("⭐ " if a["ville"] in cfg.priorites else "")
                        + ("Coloc – " if a["colocation"] else "")
                        + f"{v['ville']} – {v['surface']} m² – {v['prix']} € CC",
             "lien": a["lien"],
@@ -457,6 +471,8 @@ def main() -> None:
     ap.add_argument("--test", action="store_true", help="tester Gmail + Telegram")
     ap.add_argument("--analyser", action="store_true", help="afficher l'extraction des emails récents")
     ap.add_argument("--trouver-chat-id", action="store_true", help="afficher votre identifiant Telegram")
+    ap.add_argument("--essai", type=int, nargs="?", const=3, metavar="N",
+                    help="notifier les N dernières annonces écartées, pour essayer (envois vers vous-même)")
     args = ap.parse_args()
     cfg = charger_config()
 
@@ -475,6 +491,14 @@ def main() -> None:
 
     verifier(cfg, "gmail_adresse", "gmail_mot_de_passe", "telegram_token", "telegram_chat_id")
     db = Stockage(cfg.fichier_db)
+    if args.essai:
+        ids = db.passer_en_essai(args.essai)
+        if ids:
+            log.info("🧪 Essai : %d annonce(s) écartée(s) vont être notifiées (n° %s). Les envois partiront "
+                     "vers %s, jamais vers les annonceurs.", len(ids), ", ".join(map(str, ids)),
+                     cfg.email_reponse or cfg.gmail_adresse)
+        else:
+            log.info("🧪 Essai : aucune annonce écartée en base. Lancez d'abord python main.py une fois.")
     try:
         boucle(cfg, db, args.une_fois)
     except KeyboardInterrupt:

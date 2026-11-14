@@ -248,6 +248,11 @@ Le fichier `.env` contient vos secrets : ne l'envoyez à personne et ne le publi
 
    Pour un seul passage (utile pour essayer) : `python main.py --une-fois`
 
+   **Mode essai** : `python main.py --essai` notifie les 3 dernières annonces **écartées** (`--essai 5` pour 5),
+   avec un bandeau 🧪 ESSAI. Vous pouvez tout tester sur de vraies annonces : « Postuler » et « Brouillon »
+   envoient alors le dossier **à votre adresse** (`EMAIL_REPONSE`, sinon la boîte dédiée), jamais à
+   l'annonceur, avec un objet commençant par « [ESSAI] ». Pas de rappel de relance pour ces annonces.
+
 > L'outil ne tourne que lorsque l'ordinateur est allumé et non en veille. Sur un portable,
 > désactivez la mise en veille automatique pendant vos recherches, ou lancez-le le matin.
 > Les emails arrivés pendant une coupure sont traités au redémarrage (jusqu'à `JOURS_HISTORIQUE` jours).
