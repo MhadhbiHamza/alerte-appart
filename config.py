@@ -9,6 +9,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+import zones
+
 # Dossier où se trouve ce fichier : tous les chemins relatifs partent d'ici.
 DOSSIER_PROJET = Path(__file__).resolve().parent
 
@@ -21,7 +23,8 @@ class Config:
     telegram_token: str
     telegram_chat_id: str
     prix_max: int
-    arrondissements: set
+    zones: set
+    priorites: set
     expediteurs: list
     dossier_pdf: Path
     intervalle_secondes: int
@@ -43,6 +46,33 @@ def _liste(valeur: str) -> list:
     return [x.strip() for x in valeur.split(",") if x.strip()]
 
 
+ZONES_PAR_DEFAUT = (
+    "Paris 15e, Paris 14e, Paris 12e, Paris 13e, Paris 11e, "
+    "Ivry-sur-Seine, Maisons-Alfort, Clamart, Asnières-sur-Seine, Bois-Colombes, "
+    "Vitry-sur-Seine, Saint-Denis, Montreuil, Meudon, "
+    "Vincennes, Charenton-le-Pont, Montrouge, Clichy, Boulogne-Billancourt, Issy-les-Moulineaux"
+)
+PRIORITES_PAR_DEFAUT = "Ivry-sur-Seine, Maisons-Alfort, Paris 13e, Paris 14e, Asnières-sur-Seine"
+
+
+def _zones(valeur: str, variable: str) -> set:
+    """« Paris 13, asnieres » -> {"Paris 13e", "Asnières-sur-Seine"} (erreur claire si inconnu)."""
+    resultat, inconnues = set(), []
+    for nom in _liste(valeur):
+        zone = zones.normaliser_zone(nom)
+        if zone:
+            resultat.add(zone)
+        else:
+            inconnues.append(nom)
+    if inconnues:
+        raise SystemExit(
+            f"{variable} dans .env : zone(s) inconnue(s) : {', '.join(inconnues)}\n"
+            "Écrivez « Paris 13e » pour un arrondissement, ou une de ces communes : "
+            + ", ".join(zones.COMMUNES) + "\n(pour une autre commune, ajoutez-la dans zones.py)"
+        )
+    return resultat
+
+
 def charger_config() -> Config:
     """Charge .env puis construit l'objet Config (avec valeurs par défaut)."""
     load_dotenv(DOSSIER_PROJET / ".env")
@@ -55,7 +85,8 @@ def charger_config() -> Config:
         telegram_token=g("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=g("TELEGRAM_CHAT_ID", "").strip(),
         prix_max=int(g("PRIX_MAX_CC", "900")),
-        arrondissements={int(x) for x in _liste(g("ARRONDISSEMENTS", "11,14,15,17,18"))},
+        zones=_zones(g("ZONES", ZONES_PAR_DEFAUT), "ZONES"),
+        priorites=_zones(g("PRIORITES", PRIORITES_PAR_DEFAUT), "PRIORITES"),
         expediteurs=_liste(g("EXPEDITEURS", "jinka,seloger,pap")),
         dossier_pdf=_chemin(g("DOSSIER_PDF", "dossier.pdf")),
         intervalle_secondes=int(g("INTERVALLE_SECONDES", "120")),

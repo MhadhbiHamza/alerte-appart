@@ -3,8 +3,8 @@
 Petit outil Python qui tourne sur votre ordinateur et, **toutes les 2 minutes** :
 
 1. lit les nouveaux emails d'alerte **Jinka, SeLoger et PAP** arrivés dans une boîte Gmail dédiée (IMAP) ;
-2. extrait de chaque annonce : prix charges comprises, surface, arrondissement, lien, et email ou téléphone s'il y en a un ;
-3. ne garde que les annonces **≤ 900 € CC** dans les **11e, 14e, 15e, 17e et 18e**, et ignore les doublons ;
+2. extrait de chaque annonce : prix charges comprises, surface, ville ou arrondissement, lien, et email ou téléphone s'il y en a un ;
+3. ne garde que les annonces **≤ 900 € CC** dans **vos zones** (5 arrondissements et 15 communes de proche banlieue, réglables dans `.env`), signale par ⭐ vos **zones prioritaires**, et ignore les doublons ;
 4. remplit votre modèle de candidature (`templates.md`) ;
 5. vous envoie une **notification Telegram** avec l'annonce, son lien et le message prêt à copier ;
 6. si l'annonce donne l'email de l'agence, crée un **brouillon Gmail** avec votre dossier PDF en pièce jointe ;
@@ -75,7 +75,7 @@ Petit outil Python qui tourne sur votre ordinateur et, **toutes les 2 minutes** 
 
 1. Créez (si ce n'est pas déjà fait) une adresse Gmail réservée à la recherche, par ex. `prenom.appart@gmail.com`.
 2. Sur **Jinka**, **SeLoger** et **PAP**, créez vos alertes email avec cette adresse
-   (location, Paris 11e/14e/15e/17e/18e, budget 900 €). Plus vos alertes sont précises, moins il y a de bruit.
+   (location, budget 900 €, vos villes) : suivez le guide pas à pas **[ALERTES.md](ALERTES.md)**.
 3. Vérifiez que les alertes arrivent bien dans la **Boîte de réception** (pas en Spam ni en Promotions filtrées ailleurs).
    Si elles arrivent dans un autre libellé, indiquez-le dans `DOSSIER_IMAP` (voir étape 5).
 
@@ -143,8 +143,13 @@ Google n'autorise pas un programme à utiliser votre mot de passe habituel. Il f
    | `TELEGRAM_CHAT_ID` | `123456789` | étape 4 |
 
 3. Les autres réglages ont déjà les bonnes valeurs, modifiables si besoin :
-   `PRIX_MAX_CC=900`, `ARRONDISSEMENTS=11,14,15,17,18`, `RELANCE_HEURES=48`, `INTERVALLE_SECONDES=120`,
-   `DOSSIER_PDF=dossier.pdf`, `DOSSIER_IMAP=INBOX`.
+   `PRIX_MAX_CC=900`, `ZONES=…` (vos 20 zones), `PRIORITES=…` (vos 5 priorités, marquées ⭐),
+   `RELANCE_HEURES=48`, `INTERVALLE_SECONDES=120`, `DOSSIER_PDF=dossier.pdf`, `DOSSIER_IMAP=INBOX`.
+
+   Dans `ZONES` et `PRIORITES`, écrivez `Paris 13e` pour un arrondissement, ou le nom d'une commune
+   (`Ivry-sur-Seine`, `Asnieres`… les accents et majuscules ne comptent pas). Les communes reconnues sont
+   listées dans `zones.py` ; pour en ajouter une, ajoutez une ligne dans `COMMUNES` (nom + code postal).
+   Si un nom n'est pas reconnu, l'outil le dit au démarrage.
 
 Le fichier `.env` contient vos secrets : ne l'envoyez à personne et ne le publiez pas.
 
@@ -154,7 +159,7 @@ Le fichier `.env` contient vos secrets : ne l'envoyez à personne et ne le publi
 
 1. Ouvrez `templates.md` et adaptez le texte sous **`## Objet`** et **`## Message`**
    (présentation, revenus, garant, signature…). Les variables `{prix}`, `{surface}`,
-   `{arrondissement}`, `{lien}`, `{source}`, `{contact}` sont remplacées automatiquement.
+   `{ville}`, `{quartier}`, `{lien}`, `{source}`, `{contact}` sont remplacées automatiquement.
    Le fichier est relu à chaque annonce : pas besoin de relancer l'outil après une modification.
 2. Fusionnez votre dossier de location en **un seul PDF** et placez-le dans le dossier du projet
    sous le nom `dossier.pdf` (ou indiquez son chemin dans `DOSSIER_PDF`).
@@ -211,8 +216,14 @@ Le fichier `.env` contient vos secrets : ne l'envoyez à personne et ne le publi
 ## 9. Bon à savoir et dépannage
 
 **Comment l'extraction fonctionne.** Les alertes contiennent souvent plusieurs annonces. L'outil isole
-chaque « carte » d'annonce dans l'email puis y cherche le prix, la surface (`m²`), l'arrondissement
-(`Paris 11e`, `75011`…) et un éventuel email ou téléphone. Si un site change la mise en page de ses emails,
+chaque « carte » d'annonce dans l'email puis y cherche le prix, la surface (`m²`), la ville
+et un éventuel email ou téléphone.
+
+**Comment la ville est reconnue** (`zones.py`) : d'abord par le **code postal** (`75013`, `94200`…), sinon
+par le nom (`Paris 13e`, `Ivry-sur-Seine`…) en gardant la première mention. Les homonymes sont écartés
+(Clichy-sous-Bois, Asnières-sur-Oise…), ainsi que les rues parisiennes (« rue de Charenton », « Porte d'Ivry »).
+Les **quartiers** ne sont pas filtrés, car les emails d'alerte les donnent rarement : s'ils sont cités, ils sont affichés
+dans la notification (« 📌 Quartier repéré : Alésia »). Si un site change la mise en page de ses emails,
 lancez `python main.py --analyser` pour voir ce qui est compris.
 
 **Charges.** Si l'annonce indique « HC » avec le montant des charges, il est ajouté au loyer.
@@ -223,8 +234,8 @@ vérifiez le total vous-même. Si rien n'est indiqué, le prix est considéré c
 (il faut souvent passer par le site). Dans ce cas, pas de brouillon : copiez le message reçu sur Telegram
 dans le formulaire de contact de l'annonce.
 
-**Doublons.** Une annonce est considérée comme déjà vue si son lien est identique, ou si elle a le même
-arrondissement, le même prix et la même surface (la même annonce reçue via Jinka et SeLoger n'est notifiée qu'une fois).
+**Doublons.** Une annonce est considérée comme déjà vue si son lien est identique, ou si elle a la même
+ville, le même prix et la même surface (la même annonce reçue via Jinka et SeLoger n'est notifiée qu'une fois).
 Pour repartir de zéro, arrêtez l'outil et supprimez `annonces.db`.
 
 **Les emails ne sont pas marqués comme lus** : l'outil lit en lecture seule.
@@ -249,7 +260,8 @@ Pour repartir de zéro, arrêtez l'outil et supprimez `annonces.db`.
 | `main.py` | programme principal : boucle toutes les 2 min et enchaîne les étapes |
 | `config.py` | lecture du fichier `.env` |
 | `gmail.py` | lecture des alertes et création des brouillons (IMAP uniquement, aucun envoi) |
-| `extraction.py` | découpage des emails en annonces, extraction prix/surface/arrondissement/contact, filtre |
+| `extraction.py` | découpage des emails en annonces, extraction prix/surface/contact, filtre |
+| `zones.py` | vos communes et arrondissements : reconnaissance de la ville et des quartiers |
 | `stockage.py` | base SQLite `annonces.db` (doublons, état des notifications et relances) |
 | `modele.py` | remplissage de `templates.md` |
 | `telegram.py` | envoi des messages Telegram |

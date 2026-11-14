@@ -5,8 +5,8 @@ Principe utilisé, valable quel que soit le site :
   1. on part de chaque lien de l'email ;
   2. on « remonte » dans le HTML tant que le bloc ne contient qu'une seule
      annonce (une seule surface « xx m² ») : on obtient la « carte » de l'annonce ;
-  3. dans le texte de cette carte, on cherche prix, surface, arrondissement
-     et contact avec des expressions régulières.
+  3. dans le texte de cette carte, on cherche prix, surface, ville
+     (voir zones.py) et contact avec des expressions régulières.
 
 Le format des emails peut changer : utilisez `python main.py --analyser`
 pour vérifier ce qui est extrait de vos vrais emails.
@@ -20,6 +20,8 @@ from typing import Iterator, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
+
+import zones
 
 # --------------------------------------------------------------------------
 # Expressions régulières
@@ -44,14 +46,6 @@ CHARGES_RE = re.compile(
 )
 HC_RE = re.compile(r"\bhc\b|hors[\s-]+charges", re.I)
 CC_RE = re.compile(r"\bcc\b|charges?\s+compris(?:es?)?|tout\s+compris", re.I)
-
-# Arrondissement, du plus fiable au moins fiable.
-ARRONDISSEMENT_RES = [
-    re.compile(r"\b75(0(?:0[1-9]|1\d|20)|116)\b"),  # code postal 75011, 75116
-    re.compile(r"\bparis\s*\(?\s*(\d{1,2})\s*(?:er|ère|e|è|ème|eme|°)(?![a-zà-ÿ])", re.I),  # Paris 11e
-    re.compile(r"\b(\d{1,2})\s*(?:er|ère|e|è|ème|eme)\s+arr", re.I),  # 11e arrondissement
-    re.compile(r"\bparis\s*\(?\s*(\d{1,2})\s*\)?(?=\s*(?:$|[,;\-–—|·•/]))", re.I | re.M),  # Paris 11 -
-]
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}", re.I)
 TELEPHONE_RE = re.compile(
@@ -91,7 +85,8 @@ class Annonce:
     prix_cc: Optional[int] = None
     charges_incertaines: bool = False  # True si prix HC sans montant de charges
     surface: Optional[float] = None
-    arrondissement: Optional[int] = None
+    ville: Optional[str] = None      # « Paris 13e », « Ivry-sur-Seine »…
+    quartier: Optional[str] = None   # quartier de votre liste, s'il est cité
     email_contact: Optional[str] = None
     telephone: Optional[str] = None
 
@@ -99,10 +94,10 @@ class Annonce:
         """Identifiant servant à repérer les doublons.
 
         La même annonce reçue de Jinka ET de SeLoger a des liens différents,
-        mais le même arrondissement / prix / surface : on s'appuie dessus.
+        mais la même ville / prix / surface : on s'appuie dessus.
         """
-        if self.prix_cc and self.surface and self.arrondissement:
-            return f"{self.arrondissement}|{self.prix_cc}|{round(self.surface)}"
+        if self.prix_cc and self.surface and self.ville:
+            return f"{self.ville}|{self.prix_cc}|{round(self.surface)}"
         return "lien|" + normaliser_lien(self.lien)
 
 
@@ -159,15 +154,6 @@ def extraire_prix(texte: str) -> Tuple[Optional[int], bool]:
 def extraire_surface(texte: str) -> Optional[float]:
     m = SURFACE_RE.search(texte)
     return float(m.group(1).replace(",", ".")) if m else None
-
-
-def extraire_arrondissement(texte: str) -> Optional[int]:
-    for regex in ARRONDISSEMENT_RES:
-        for m in regex.finditer(texte):
-            n = int(m.group(1)) % 100  # "011" -> 11, "116" -> 16
-            if 1 <= n <= 20:
-                return n
-    return None
 
 
 def extraire_email(texte: str, a_exclure=()) -> Optional[str]:
@@ -301,6 +287,7 @@ def extraire_annonces(msg: EmailMessage, a_exclure=()) -> List[Annonce]:
             continue
         liens_vus.add(lien)
         prix, incertain = extraire_prix(bloc)
+        ville = zones.detecter_zone(bloc)
         annonces.append(Annonce(
             source=source,
             lien=lien,
@@ -308,21 +295,22 @@ def extraire_annonces(msg: EmailMessage, a_exclure=()) -> List[Annonce]:
             prix_cc=prix,
             charges_incertaines=incertain,
             surface=extraire_surface(bloc),
-            arrondissement=extraire_arrondissement(bloc),
+            ville=ville,
+            quartier=zones.detecter_quartier(bloc, ville),
             email_contact=extraire_email(bloc, a_exclure),
             telephone=extraire_telephone(bloc),
         ))
     return annonces
 
 
-def est_eligible(a: Annonce, prix_max: int, arrondissements: set) -> Tuple[bool, str]:
+def est_eligible(a: Annonce, prix_max: int, zones_voulues: set) -> Tuple[bool, str]:
     """Applique vos critères. Renvoie (gardée ?, raison)."""
     if a.prix_cc is None:
         return False, "prix introuvable"
-    if a.arrondissement is None:
-        return False, "arrondissement introuvable"
+    if a.ville is None:
+        return False, "ville introuvable"
     if a.prix_cc > prix_max:
         return False, f"trop cher ({a.prix_cc} €)"
-    if a.arrondissement not in arrondissements:
-        return False, f"hors zone ({a.arrondissement}e)"
+    if a.ville not in zones_voulues:
+        return False, f"hors zone ({a.ville})"
     return True, "ok"

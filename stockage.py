@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS annonces (
     prix_cc             INTEGER,
     charges_incertaines INTEGER DEFAULT 0,
     surface             REAL,
-    arrondissement      INTEGER,
+    ville               TEXT,                  -- « Paris 13e », « Ivry-sur-Seine »…
+    quartier            TEXT,
     email_contact       TEXT,
     telephone           TEXT,
     retenue             INTEGER NOT NULL,      -- 1 = correspond à vos critères
@@ -48,6 +49,12 @@ class Stockage:
         self.db = sqlite3.connect(str(chemin))
         self.db.row_factory = sqlite3.Row  # accès aux colonnes par leur nom
         self.db.executescript(SCHEMA)
+        # Mise à jour d'une base créée par une version précédente de l'outil.
+        colonnes = {c[1] for c in self.db.execute("PRAGMA table_info(annonces)")}
+        for nom in ("ville", "quartier"):
+            if nom not in colonnes:
+                self.db.execute(f"ALTER TABLE annonces ADD COLUMN {nom} TEXT")
+        self.db.commit()
 
     # ---- emails ---------------------------------------------------------
     def email_deja_traite(self, cle: str) -> bool:
@@ -59,7 +66,7 @@ class Stockage:
 
     # ---- annonces -------------------------------------------------------
     def deja_vue(self, a: Annonce) -> bool:
-        """Doublon si même empreinte (prix+surface+arrondissement) OU même lien."""
+        """Doublon si même empreinte (ville+prix+surface) OU même lien."""
         ligne = self.db.execute(
             "SELECT 1 FROM annonces WHERE empreinte=? OR lien_normalise=?",
             (a.empreinte(), normaliser_lien(a.lien)),
@@ -70,10 +77,10 @@ class Stockage:
         self.db.execute(
             """INSERT OR IGNORE INTO annonces
                (empreinte, lien, lien_normalise, source, prix_cc, charges_incertaines, surface,
-                arrondissement, email_contact, telephone, retenue, raison, vue_le)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ville, quartier, email_contact, telephone, retenue, raison, vue_le)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (a.empreinte(), a.lien, normaliser_lien(a.lien), a.source, a.prix_cc,
-             int(a.charges_incertaines), a.surface, a.arrondissement, a.email_contact,
+             int(a.charges_incertaines), a.surface, a.ville, a.quartier, a.email_contact,
              a.telephone, int(retenue), raison, maintenant()),
         )
         self.db.commit()

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Dict, Tuple
 
-OBJET_PAR_DEFAUT = "Candidature pour l'appartement {surface} m² – Paris {arrondissement}"
+OBJET_PAR_DEFAUT = "Candidature pour l'appartement {surface} m² – {ville}"
 
 
 def charger(chemin: Path) -> Tuple[str, str]:
@@ -40,12 +40,14 @@ def remplir(texte: str, valeurs: Dict[str, str]) -> str:
 
 def valeurs_annonce(annonce) -> Dict[str, str]:
     """Prépare les variables utilisables dans templates.md à partir d'une annonce."""
-    arr = annonce["arrondissement"]
     surface = annonce["surface"]
+    ville = annonce["ville"] or "?"
     return {
         "prix": str(annonce["prix_cc"] or "?"),
         "surface": (f"{surface:g}" if surface else "?"),
-        "arrondissement": ("1er" if arr == 1 else f"{arr}e") if arr else "?",
+        "ville": ville,
+        "arrondissement": ville,  # ancien nom de variable, gardé pour compatibilité
+        "quartier": annonce["quartier"] or "",
         "lien": annonce["lien"],
         "source": annonce["source"] or "",
         "contact": annonce["email_contact"] or annonce["telephone"] or "",

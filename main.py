@@ -41,10 +41,10 @@ def traiter_nouveaux_emails(cfg: Config, db: Stockage, imap) -> None:
             if db.deja_vue(a):
                 log.info("  doublon ignoré : %s", a.lien[:80])
                 continue
-            retenue, raison = extraction.est_eligible(a, cfg.prix_max, cfg.arrondissements)
+            retenue, raison = extraction.est_eligible(a, cfg.prix_max, cfg.zones)
             db.ajouter(a, retenue, raison)
-            log.info("  %s %s € / %s m² / %se -> %s",
-                     "✅" if retenue else "❌", a.prix_cc, a.surface, a.arrondissement, raison)
+            log.info("  %s %s € / %s m² / %s -> %s",
+                     "✅" if retenue else "❌", a.prix_cc, a.surface, a.ville, raison)
         db.marquer_email_traite(cle)
 
 
@@ -52,13 +52,16 @@ def traiter_nouveaux_emails(cfg: Config, db: Stockage, imap) -> None:
 # Étapes 4-6 : message de candidature, brouillon Gmail, notification Telegram
 # --------------------------------------------------------------------------
 
-def message_telegram(annonce, message: str, etat_brouillon: str) -> str:
+def message_telegram(annonce, message: str, etat_brouillon: str, prioritaire: bool = False) -> str:
     e = telegram.echapper
     v = modele.valeurs_annonce(annonce)
     lignes = [
-        f"🏠 <b>Nouvelle annonce</b> ({e(v['source'])})",
-        f"📍 Paris {e(v['arrondissement'])} · {e(v['surface'])} m² · <b>{e(v['prix'])} € CC</b>",
+        ("⭐ <b>ZONE PRIORITAIRE</b>\n" if prioritaire else "")
+        + f"🏠 <b>Nouvelle annonce</b> ({e(v['source'])})",
+        f"📍 {e(v['ville'])} · {e(v['surface'])} m² · <b>{e(v['prix'])} € CC</b>",
     ]
+    if v["quartier"]:
+        lignes.append(f"📌 Quartier repéré : {e(v['quartier'])}")
     if annonce["charges_incertaines"]:
         lignes.append("⚠️ Prix indiqué hors charges, montant des charges inconnu : à vérifier.")
     lignes.append(f'🔗 <a href="{e(annonce["lien"], True)}">Voir l\'annonce</a>')
@@ -110,7 +113,7 @@ def notifier_annonces(cfg: Config, db: Stockage, imap) -> None:
             etat = creer_brouillon_si_possible(cfg, imap, annonce, objet, message)
             db.marquer_brouillon(annonce["id"], etat)
 
-        telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, message_telegram(annonce, message, etat))
+        telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, message_telegram(annonce, message, etat, annonce["ville"] in cfg.priorites))
         db.marquer_notifiee(annonce["id"])
         log.info("Notification envoyée pour l'annonce #%d", annonce["id"])
 
@@ -126,7 +129,8 @@ def mettre_a_jour_csv(cfg: Config, db: Stockage) -> None:
             "id": a["id"],
             "date": a["notifiee_le"].replace("T", " "),
             "source": a["source"],
-            "annonce": f"Paris {v['arrondissement']} – {v['surface']} m² – {v['prix']} € CC",
+            "annonce": ("⭐ " if a["ville"] in cfg.priorites else "")
+                       + f"{v['ville']} – {v['surface']} m² – {v['prix']} € CC",
             "lien": a["lien"],
             "contact": v["contact"],
             "brouillon_gmail": a["brouillon"] or "",
@@ -154,7 +158,7 @@ def envoyer_relances(cfg: Config, db: Stockage) -> None:
             e = telegram.echapper
             texte = (
                 f"⏰ <b>Pensez à relancer</b> (annonce reçue il y a {cfg.relance_heures} h)\n"
-                f"📍 Paris {e(v['arrondissement'])} · {e(v['surface'])} m² · {e(v['prix'])} € CC\n"
+                f"📍 {e(v['ville'])} · {e(v['surface'])} m² · {e(v['prix'])} € CC\n"
                 f'🔗 <a href="{e(a["lien"], True)}">Voir l\'annonce</a>\n'
                 + (f"Contact : {e(v['contact'])}\n" if v["contact"] else "")
                 + f"Statut actuel dans suivi.csv : {e(statut or 'nouveau')}"
@@ -186,8 +190,8 @@ def cycle(cfg: Config, db: Stockage) -> None:
 
 
 def boucle(cfg: Config, db: Stockage, une_fois: bool) -> None:
-    log.info("Démarrage. Critères : ≤ %d € CC, arrondissements %s. Ctrl+C pour arrêter.",
-             cfg.prix_max, sorted(cfg.arrondissements))
+    log.info("Démarrage. Critères : ≤ %d € CC, %d zones (priorités : %s). Ctrl+C pour arrêter.",
+             cfg.prix_max, len(cfg.zones), ", ".join(sorted(cfg.priorites)))
     while True:
         try:
             cycle(cfg, db)
@@ -222,8 +226,8 @@ def commande_analyser(cfg: Config) -> None:
         for _, msg in gmail.lire_emails(imap, cfg.dossier_imap, cfg.expediteurs, cfg.jours_historique):
             print(f"\n=== {msg.get('Date')} | {msg.get('From')} | {msg.get('Subject')}")
             for a in extraction.extraire_annonces(msg, a_exclure={cfg.gmail_adresse.lower()}):
-                ok, raison = extraction.est_eligible(a, cfg.prix_max, cfg.arrondissements)
-                print(f"  {'✅' if ok else '❌'} {a.prix_cc} € | {a.surface} m² | {a.arrondissement}e | "
+                ok, raison = extraction.est_eligible(a, cfg.prix_max, cfg.zones)
+                print(f"  {'✅' if ok else '❌'} {a.prix_cc} € | {a.surface} m² | {a.ville} | "
                       f"{a.email_contact or a.telephone or '-'} | {raison}\n     {a.lien[:100]}")
     finally:
         imap.logout()

@@ -18,7 +18,9 @@ import extraction  # noqa: E402
 import main  # noqa: E402
 import modele  # noqa: E402
 import suivi  # noqa: E402
-from config import Config  # noqa: E402
+import zones  # noqa: E402
+import config  # noqa: E402
+from config import Config, _zones  # noqa: E402
 from stockage import Stockage  # noqa: E402
 
 HTML_JINKA = """
@@ -77,26 +79,26 @@ def email_de(expediteur, html=None, texte=None):
 class TestExtraction(unittest.TestCase):
     def test_jinka_plusieurs_annonces(self):
         annonces = extraction.extraire_annonces(email_de("Jinka <alerte@jinka.fr>", HTML_JINKA))
-        resume = [(a.prix_cc, a.surface, a.arrondissement, a.lien) for a in annonces]
+        resume = [(a.prix_cc, a.surface, a.ville, a.lien) for a in annonces]
         self.assertEqual(resume, [
-            (880, 32.0, 11, "https://t.jinka.fr/c/abc111"),
-            (1150, 28.0, 14, "https://t.jinka.fr/c/abc222"),
-            (790, 22.0, 20, "https://t.jinka.fr/c/abc333"),
+            (880, 32.0, "Paris 11e", "https://t.jinka.fr/c/abc111"),
+            (1150, 28.0, "Paris 14e", "https://t.jinka.fr/c/abc222"),
+            (790, 22.0, "Paris 20e", "https://t.jinka.fr/c/abc333"),
         ])
         self.assertTrue(all(a.source == "Jinka" for a in annonces))
 
     def test_seloger_charges_et_contact(self):
         a1, a2 = extraction.extraire_annonces(email_de("SeLoger <alertes@mail.seloger.com>", HTML_SELOGER))
-        self.assertEqual((a1.prix_cc, a1.surface, a1.arrondissement), (880, 35.0, 15))
+        self.assertEqual((a1.prix_cc, a1.surface, a1.ville), (880, 35.0, "Paris 15e"))
         self.assertEqual(a1.email_contact, "contact@agence-dupont.fr")
         self.assertEqual(a1.telephone, "01 45 67 89 10")
         self.assertEqual(a1.source, "SeLoger")
-        self.assertEqual((a2.prix_cc, a2.arrondissement, a2.charges_incertaines), (700, 17, True))
+        self.assertEqual((a2.prix_cc, a2.ville, a2.charges_incertaines), (700, "Paris 17e", True))
         self.assertIsNone(a2.email_contact)  # no-reply@seloger.com ignoré
 
     def test_pap_texte_brut(self):
         (a,) = extraction.extraire_annonces(email_de("PAP <alerte@pap.fr>", texte=TEXTE_PAP))
-        self.assertEqual((a.prix_cc, a.surface, a.arrondissement), (890, 30.0, 18))
+        self.assertEqual((a.prix_cc, a.surface, a.ville), (890, 30.0, "Paris 18e"))
         self.assertEqual(a.lien, "https://www.pap.fr/annonces/appartement-paris-18e-r123456")
         self.assertEqual(a.source, "PAP")
 
@@ -106,22 +108,56 @@ class TestExtraction(unittest.TestCase):
         self.assertEqual(extraction.extraire_prix("850,00 € charges comprises"), (850, False))
         self.assertEqual(extraction.extraire_prix("Charges : 40 € — loyer 760 € HC"), (800, False))
 
-    def test_arrondissements(self):
-        for texte, n in [("Paris 1er", 1), ("75116", 16), ("Paris 17ème", 17), ("11e arrondissement", 11),
-                         ("Paris 14 - 25 m²", 14), ("Appartement Paris 2 pièces", None)]:
-            self.assertEqual(extraction.extraire_arrondissement(texte), n, texte)
-
     def test_filtre(self):
-        a = extraction.Annonce("Jinka", "l", "", prix_cc=900, surface=20, arrondissement=18)
-        self.assertTrue(extraction.est_eligible(a, 900, {11, 14, 15, 17, 18})[0])
+        voulues = {"Paris 13e", "Ivry-sur-Seine"}
+        a = extraction.Annonce("Jinka", "l", "", prix_cc=900, surface=20, ville="Ivry-sur-Seine")
+        self.assertTrue(extraction.est_eligible(a, 900, voulues)[0])
         a.prix_cc = 901
-        self.assertFalse(extraction.est_eligible(a, 900, {11, 14, 15, 17, 18})[0])
+        self.assertFalse(extraction.est_eligible(a, 900, voulues)[0])
+        a.prix_cc, a.ville = 800, "Paris 18e"
+        self.assertEqual(extraction.est_eligible(a, 900, voulues), (False, "hors zone (Paris 18e)"))
+
+
+class TestZones(unittest.TestCase):
+    def test_detection(self):
+        cas = [
+            ("Paris 1er", "Paris 1er"), ("75116", "Paris 16e"), ("Paris 17ème", "Paris 17e"),
+            ("13e arrondissement", "Paris 13e"), ("Paris 14 - 25 m²", "Paris 14e"),
+            ("Appartement Paris 2 pièces", None),
+            ("Ivry-sur-Seine (94200)", "Ivry-sur-Seine"), ("Asnières-sur-Seine", "Asnières-sur-Seine"),
+            ("ASNIERES SUR SEINE", "Asnières-sur-Seine"), ("St-Denis, Basilique", "Saint-Denis"),
+            ("Maisons Alfort", "Maisons-Alfort"), ("Bécon, Bois-Colombes", "Bois-Colombes"),
+            ("Levallois-Perret 92300", "autre commune (92300)"),
+            # homonymes et rues parisiennes
+            ("Clichy-sous-Bois", None), ("Asnières-sur-Oise", None), ("Vitry-le-François", None),
+            ("Paris 12e, rue de Charenton", "Paris 12e"), ("Porte d'Ivry, Paris 13e", "Paris 13e"),
+            ("Avenue de Clichy", None),
+            # le code postal l'emporte, sinon la première mention
+            ("Paris 13e, proche Ivry (94200)", "Ivry-sur-Seine"),
+            ("Ivry-sur-Seine, à 5 min de Paris 13e", "Ivry-sur-Seine"),
+            ("Paris 12e, proche Vincennes", "Paris 12e"),
+        ]
+        for texte, attendu in cas:
+            self.assertEqual(zones.detecter_zone(texte), attendu, texte)
+
+    def test_normalisation_env(self):
+        self.assertEqual(_zones("paris 13, 75014, Paris 15ème, asnieres, ivry sur seine", "ZONES"),
+                         {"Paris 13e", "Paris 14e", "Paris 15e", "Asnières-sur-Seine", "Ivry-sur-Seine"})
+        self.assertEqual(len(_zones(config.ZONES_PAR_DEFAUT, "ZONES")), 20)
+        with self.assertRaises(SystemExit):
+            _zones("Paris 13e, Levallois", "ZONES")
+
+    def test_quartier(self):
+        self.assertEqual(zones.detecter_quartier("Studio métro Alésia", "Paris 14e"), "Alésia")
+        self.assertEqual(zones.detecter_quartier("Proche MAISON BLANCHE", "Paris 13e"), "Maison-Blanche")
+        self.assertEqual(zones.detecter_quartier("Quartier Bécon", "Asnières-sur-Seine"), "Bécon")
+        self.assertIsNone(zones.detecter_quartier("Alésia", "Paris 13e"))
 
 
 class TestModele(unittest.TestCase):
     def test_remplissage(self):
         objet, message = modele.charger(Path(__file__).parent.parent / "templates.md")
-        v = {"prix": "880", "surface": "32", "arrondissement": "11e", "lien": "https://x"}
+        v = {"prix": "880", "surface": "32", "ville": "Paris 11e", "lien": "https://x"}
         self.assertEqual(modele.remplir(objet, v), "Candidature – Appartement 32 m² Paris 11e – 880 € CC")
         self.assertIn("880 € charges comprises (https://x)", modele.remplir(message, v))
         self.assertEqual(modele.remplir("{inconnue}", v), "{inconnue}")
@@ -134,7 +170,8 @@ class TestCycleComplet(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         pdf = tmp / "dossier.pdf"
         pdf.write_bytes(b"%PDF-1.4 test")
-        cfg = Config("moi@gmail.com", "x", "INBOX", "tok", "42", 900, {11, 14, 15, 17, 18},
+        cfg = Config("moi@gmail.com", "x", "INBOX", "tok", "42", 900,
+                     _zones(config.ZONES_PAR_DEFAUT, "ZONES"), {"Ivry-sur-Seine"},
                      ["jinka", "seloger", "pap"], pdf, 120, 48, 2,
                      Path(__file__).parent.parent / "templates.md", tmp / "suivi.csv", tmp / "a.db")
         db = Stockage(cfg.fichier_db)
@@ -144,6 +181,10 @@ class TestCycleComplet(unittest.TestCase):
             # même annonce que la 1re de Jinka, reçue via PAP : doit être ignorée (doublon)
             ("INBOX:1:3", email_de("PAP <alerte@pap.fr>",
                                    texte="Paris 11e - 32 m²\n880 € CC\nhttps://www.pap.fr/annonces/r999")),
+            # banlieue prioritaire, avec un quartier de la liste
+            ("INBOX:1:4", email_de("PAP <alerte@pap.fr>",
+                                   texte="Ivry-sur-Seine (94200) - 2 pièces 33 m², métro Mairie d'Ivry\n"
+                                         "870 € CC\nhttps://www.pap.fr/annonces/r555")),
         ]
 
         def faux_lire(imap, dossier, exp, jours, deja_traite=None):
@@ -154,9 +195,15 @@ class TestCycleComplet(unittest.TestCase):
              mock.patch.object(main.gmail, "creer_brouillon") as brouillon, \
              mock.patch.object(main.telegram, "envoyer") as envoyer:
             main.cycle(cfg, db)
-            # 3 annonces retenues : Jinka 11e 880 €, SeLoger 15e 820+60 €,
-            # SeLoger 17e 700 € HC (retenue, mais signalée « charges inconnues »)
+            # 3 annonces retenues : Jinka 11e 880 €, SeLoger 15e 820+60 €, PAP Ivry 870 €
+            # (SeLoger 17e : hors zone ; Jinka 14e : trop cher ; Jinka 20e : hors zone)
             self.assertEqual(envoyer.call_count, 3)
+            ivry = envoyer.call_args_list[2][0][2]
+            self.assertIn("⭐", ivry)
+            self.assertIn("📍 Ivry-sur-Seine · 33 m² · <b>870 € CC</b>", ivry)
+            self.assertIn("Quartier repéré : Mairie d'Ivry", ivry)
+            self.assertIn("à Ivry-sur-Seine, proposé à 870 €", ivry)
+            self.assertNotIn("⭐", envoyer.call_args_list[0][0][2])
             self.assertEqual(brouillon.call_count, 1)  # seule l'annonce SeLoger a un email d'agence
             args = brouillon.call_args[0]
             self.assertEqual(args[2], "contact@agence-dupont.fr")
@@ -170,6 +217,7 @@ class TestCycleComplet(unittest.TestCase):
             lignes = suivi._lire(cfg.fichier_csv)
             self.assertEqual(len(lignes), 3)
             self.assertEqual(lignes[0]["statut"], "nouveau")
+            self.assertTrue(lignes[2]["annonce"].startswith("⭐ Ivry-sur-Seine"))
 
             # Relance 48 h plus tard : on vieillit les dates, et on clôt une candidature
             db.db.execute("UPDATE annonces SET notifiee_le='2000-01-01T00:00:00'")
