@@ -275,6 +275,8 @@ Pour repartir de zéro, arrêtez l'outil et supprimez `annonces.db`.
 | Aucune annonce trouvée | Lancez `--analyser`. Vérifiez que les alertes sont dans la boîte de réception et que l'adresse de l'expéditeur contient bien `jinka`, `seloger` ou `pap` (sinon ajoutez le mot dans `EXPEDITEURS`). |
 | « Dossier PDF introuvable » en appuyant sur Postuler | Vérifiez le chemin `DOSSIER_PDF` dans `.env`. |
 | Les boutons ne réagissent pas | `python main.py` doit être en train de tourner sur votre ordinateur. |
+| « 🔌 Connexion Internet perdue » (ex. `WinError 10051`) | L'ordinateur n'a plus accès à Internet : Wi-Fi coupé, sortie de veille, VPN ou réseau d'entreprise qui bloque Telegram. L'outil réessaie tout seul et affiche « Connexion rétablie ». Si ça dure, ouvrez https://api.telegram.org dans le navigateur : si la page ne s'affiche pas, coupez le VPN ou changez de réseau. |
+| Votre token Telegram a été affiché ou partagé | Envoyez `/revoke` à @BotFather, choisissez votre bot, puis mettez le nouveau token dans `.env` et relancez l'outil. |
 | Erreur `SMTPAuthenticationError` | Même cause que l'erreur IMAP : mot de passe d'application erroné. |
 
 **Tests automatiques** (sans connexion internet) : `python -m unittest discover tests`

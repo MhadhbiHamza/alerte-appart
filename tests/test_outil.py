@@ -333,6 +333,28 @@ class TestCycleComplet(unittest.TestCase):
         self.assertEqual(self.db.annonce(4)["statut"], "brouillon créé")
 
 
+class TestReseau(unittest.TestCase):
+    def test_token_jamais_dans_les_erreurs(self):
+        token = "123456:SECRET-TOKEN"
+        panne = main.telegram.requests.ConnectionError(f"Max retries exceeded with url: /bot{token}/getUpdates")
+        with mock.patch.object(main.telegram.requests, "post", side_effect=panne):
+            with self.assertRaises(main.telegram.TelegramInjoignable) as ctx:
+                main.telegram.mises_a_jour(token, 0, 1)
+        self.assertNotIn("SECRET", str(ctx.exception))
+        self.assertIsNone(ctx.exception.__cause__)
+        self.assertTrue(ctx.exception.__suppress_context__)
+
+    def test_coupure_signalee_une_seule_fois(self):
+        etat = main.EtatReseau()
+        with self.assertLogs("alerte-appart", "INFO") as logs:
+            for _ in range(3):
+                etat.erreur(OSError("réseau injoignable"))
+            etat.ok()
+        self.assertEqual(len(logs.output), 2)
+        self.assertIn("Connexion Internet perdue", logs.output[0])
+        self.assertIn("Connexion rétablie", logs.output[1])
+
+
 class TestGmail(unittest.TestCase):
     def test_critere(self):
         c = main.gmail.critere_recherche(["jinka", "seloger", "pap"], 0)

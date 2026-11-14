@@ -19,7 +19,9 @@ Garanties :
     et jamais deux fois pour la même annonce.
 """
 import argparse
+import imaplib
 import logging
+import socket
 import time
 from datetime import datetime
 
@@ -32,6 +34,27 @@ from config import Config, charger_config, verifier
 from stockage import Stockage, maintenant
 
 log = logging.getLogger("alerte-appart")
+
+# Erreurs « réseau » : Internet coupé, Wi-Fi perdu, veille, VPN… On les signale en une ligne
+# (sans le long détail technique) et l'outil réessaie tout seul.
+ERREURS_RESEAU = (OSError, socket.timeout, imaplib.IMAP4.abort)
+
+
+class EtatReseau:
+    """Affiche « connexion perdue » une seule fois, puis « connexion rétablie »."""
+
+    def __init__(self):
+        self.coupe = False
+
+    def erreur(self, exc: Exception) -> None:
+        if not self.coupe:
+            log.warning("🔌 Connexion Internet perdue (%s). L'outil réessaie tout seul…", exc)
+        self.coupe = True
+
+    def ok(self) -> None:
+        if self.coupe:
+            log.info("✅ Connexion rétablie.")
+        self.coupe = False
 
 
 # --------------------------------------------------------------------------
@@ -303,10 +326,14 @@ def boucle(cfg: Config, db: Stockage, une_fois: bool) -> None:
     log.info("Démarrage. Critères : ≤ %d € CC (coloc ≤ %d €), %d zones (priorités : %s). Ctrl+C pour arrêter.",
              cfg.prix_max, cfg.prix_max_coloc, len(cfg.zones), ", ".join(sorted(cfg.priorites)))
     prochain_cycle = 0.0
+    reseau = EtatReseau()
     while True:
         if time.time() >= prochain_cycle:
             try:
                 cycle(cfg, db)
+                reseau.ok()
+            except ERREURS_RESEAU as exc:
+                reseau.erreur(exc)
             except Exception:
                 # Une coupure réseau ne doit pas arrêter l'outil : on réessaie au cycle suivant.
                 log.exception("Erreur pendant le cycle, nouvel essai dans %d s", cfg.intervalle_secondes)
@@ -315,6 +342,11 @@ def boucle(cfg: Config, db: Stockage, une_fois: bool) -> None:
         attente = 0 if une_fois else int(min(25, max(1, prochain_cycle - time.time())))
         try:
             traiter_boutons(cfg, db, attente)
+            reseau.ok()
+        except ERREURS_RESEAU as exc:
+            reseau.erreur(exc)
+            if not une_fois:
+                time.sleep(10)
         except Exception:
             log.exception("Erreur de lecture des boutons Telegram, nouvel essai dans 10 s")
             if not une_fois:

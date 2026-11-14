@@ -16,8 +16,16 @@ LIMITE = 4096  # taille maximale d'un message Telegram
 Boutons = List[List[Tuple[str, str]]]  # lignes de (texte du bouton, donnée renvoyée à l'appui)
 
 
+class TelegramInjoignable(ConnectionError):
+    """Pas de connexion vers Telegram (Internet coupé, Wi-Fi, VPN, pare-feu…)."""
+
+
 def _appel(token: str, methode: str, donnees: dict, timeout: int = 20):
-    r = requests.post(API.format(token=token, methode=methode), json=donnees, timeout=timeout)
+    try:
+        r = requests.post(API.format(token=token, methode=methode), json=donnees, timeout=timeout)
+    except requests.RequestException as exc:
+        # On ne remonte PAS l'erreur d'origine : elle contient l'adresse complète, donc le token.
+        raise TelegramInjoignable(f"Telegram injoignable ({type(exc).__name__})") from None
     if not r.ok:
         raise RuntimeError(f"Telegram ({methode}) a refusé : {r.status_code} {r.text}")
     return r.json().get("result")
@@ -63,10 +71,8 @@ def modifier_boutons(token: str, chat_id: str, message_id: int, boutons: Boutons
 
 def trouver_chat_id(token: str) -> list:
     """Liste les conversations récentes du bot (pour trouver votre TELEGRAM_CHAT_ID)."""
-    r = requests.get(API.format(token=token, methode="getUpdates"), timeout=20)
-    r.raise_for_status()
     chats = {}
-    for maj in r.json().get("result", []):
+    for maj in _appel(token, "getUpdates", {}) or []:
         chat = (maj.get("message") or maj.get("channel_post") or {}).get("chat")
         if chat:
             chats[chat["id"]] = chat.get("first_name") or chat.get("title") or ""
