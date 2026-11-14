@@ -174,7 +174,8 @@ class Analyse:
 
 
 def analyser(annonce, prix_m2_zone: List[float], prioritaire: bool = False,
-             revenu_net: Optional[int] = None, prix_max: Optional[int] = None) -> Analyse:
+             revenu_net: Optional[int] = None, prix_max: Optional[int] = None,
+             trajet_ok: bool = False) -> Analyse:
     """Construit le résumé et les notes sur 5.
 
     `annonce` : ligne de la base ; `prix_m2_zone` : €/m² des autres annonces de la même zone
@@ -304,7 +305,8 @@ def analyser(annonce, prix_m2_zone: List[float], prioritaire: bool = False,
     if d.transports_cites:
         ligne += " — cité : " + ", ".join(d.transports_cites)
     lignes.append(ligne)
-    note_emplacement = 5 if prioritaire else EMPLACEMENT.get(ville, 2)
+    # Hors de votre liste mais envoyée par une alerte « temps de trajet » : proche, donc 3.
+    note_emplacement = 5 if prioritaire else EMPLACEMENT.get(ville, 3 if trajet_ok else 2)
     if annonce["quartier"] and not prioritaire:
         note_emplacement += 1  # un quartier de votre liste est cité
     if prioritaire:

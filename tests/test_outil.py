@@ -128,7 +128,10 @@ class TestZones(unittest.TestCase):
             ("Ivry-sur-Seine (94200)", "Ivry-sur-Seine"), ("Asnières-sur-Seine", "Asnières-sur-Seine"),
             ("ASNIERES SUR SEINE", "Asnières-sur-Seine"), ("St-Denis, Basilique", "Saint-Denis"),
             ("Maisons Alfort", "Maisons-Alfort"), ("Bécon, Bois-Colombes", "Bois-Colombes"),
-            ("Levallois-Perret 92300", "autre commune (92300)"),
+            ("Levallois-Perret 92300", "Levallois-Perret (92300)"),
+            ("Bel appartement Colombes (92700)", "Colombes (92700)"),
+            ("Studio · Saint-Maur-des-Fossés 94210", "Saint-Maur-des-Fossés (94210)"),
+            ("Studio 25 m² · 92160", "autre commune (92160)"),
             # homonymes et rues parisiennes
             ("Clichy-sous-Bois", None), ("Asnières-sur-Oise", None), ("Vitry-le-François", None),
             ("Paris 12e, rue de Charenton", "Paris 12e"), ("Porte d'Ivry, Paris 13e", "Paris 13e"),
@@ -160,6 +163,12 @@ class TestZones(unittest.TestCase):
         self.assertTrue(extraction.est_eligible(a, 900, tout, 600, toutes_zones=True)[0])
         a.prix_cc = 950   # le prix max s'applique toujours
         self.assertFalse(extraction.est_eligible(a, 900, tout, 600, toutes_zones=True)[0])
+
+    def test_alerte_trajet_emplacement(self):
+        ligne = {"texte": "", "source": "Jinka", "prix_cc": 800, "surface": 25.0, "ville": "Colombes (92700)",
+                 "colocation": 0, "charges_incertaines": 0, "quartier": None}
+        self.assertEqual(analyse.analyser(ligne, [], trajet_ok=True).notes["Emplacement"], 3)
+        self.assertEqual(analyse.analyser(ligne, []).notes["Emplacement"], 2)
 
     def test_quartier(self):
         self.assertEqual(zones.detecter_quartier("Studio métro Alésia", "Paris 14e"), "Alésia")

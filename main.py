@@ -128,7 +128,8 @@ def analyser(cfg: Config, db: Stockage, annonce) -> analyse.Analyse:
     return analyse.analyser(
         annonce, db.prix_m2_zone(annonce["ville"], bool(annonce["colocation"]), annonce["id"]),
         prioritaire=annonce["ville"] in cfg.priorites, revenu_net=cfg.revenu_net_mensuel or None,
-        prix_max=cfg.prix_max_coloc if annonce["colocation"] else cfg.prix_max)
+        prix_max=cfg.prix_max_coloc if annonce["colocation"] else cfg.prix_max,
+        trajet_ok=(annonce["source"] or "").lower() in cfg.sources_toutes_zones)
 
 
 def message_telegram(cfg: Config, annonce, message: str, resume: analyse.Analyse) -> str:

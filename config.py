@@ -108,7 +108,7 @@ def charger_config() -> Config:
         nom_expediteur=g("NOM_EXPEDITEUR", "").strip(),
         revenu_net_mensuel=int(g("REVENU_NET_MENSUEL", "0") or 0),
         # Sites dont vous gardez TOUTES les annonces, quel que soit le lieu (ex. alerte « 30 min de… »)
-        sources_toutes_zones={s.lower() for s in _liste(g("SOURCES_TOUTES_ZONES", "seloger"))},
+        sources_toutes_zones={s.lower() for s in _liste(g("SOURCES_TOUTES_ZONES", "seloger,jinka"))},
     )
 
 

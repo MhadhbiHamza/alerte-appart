@@ -102,8 +102,24 @@ def normaliser_zone(nom: str) -> Optional[str]:
     return None
 
 
+# Nom de commune écrit juste avant un code postal : « Colombes (92700) », « Saint-Maur-des-Fossés 94210 ».
+_LIAISON = r"(?:sur|sous|le|la|les|en|de|du|des|aux|et)"
+NOM_AVANT_CP_RE = re.compile(
+    rf"([A-ZÀ-Ý][\w'’]*(?:[ -](?:{_LIAISON}[ -])*[A-ZÀ-Ý][\w'’]*)*)\s*[(,–-]?\s*$")
+
+
+def _commune_hors_liste(texte: str, cp: str) -> str:
+    """« Colombes (92700) » si le nom est écrit avant le code postal, sinon « autre commune (92700) »."""
+    for m in re.finditer(rf"(?<!\d){cp}(?!\d)", texte):
+        nom = NOM_AVANT_CP_RE.search(texte[max(0, m.start() - 50):m.start()])
+        if nom and not nom.group(1).lower().startswith("paris"):
+            return f"{nom.group(1)} ({cp})"
+    return f"autre commune ({cp})"
+
+
 def detecter_zone(texte: str) -> Optional[str]:
-    """Renvoie la zone d'une annonce, « autre commune (92300) », ou None si introuvable."""
+    """Renvoie la zone d'une annonce : « Paris 13e », une commune de la liste, « Colombes (92700) »
+    pour une commune hors liste, ou None si introuvable."""
     s = simplifier(texte)
 
     # 1. Code postal : c'est lui qui décide s'il est présent.
@@ -114,7 +130,7 @@ def detecter_zone(texte: str) -> Optional[str]:
             if 1 <= n <= 20:
                 return libelle_paris(n)
             continue
-        return _CP_VERS_COMMUNE.get(cp, f"autre commune ({cp})")
+        return _CP_VERS_COMMUNE.get(cp) or _commune_hors_liste(texte, cp)
 
     # 2. Noms : on garde la première mention dans le texte.
     candidats = []

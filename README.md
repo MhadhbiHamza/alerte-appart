@@ -204,7 +204,7 @@ Google n'autorise pas un programme à utiliser votre mot de passe habituel. Il f
    `PRIX_MAX_CC=900`, `PRIX_MAX_COLOC=600`, `REVENU_NET_MENSUEL=…` (facultatif), `ZONES=…` (vos 20 zones), `PRIORITES=…` (vos 5 priorités, marquées ⭐),
    `RELANCE_HEURES=48`, `INTERVALLE_SECONDES=120`, `DOSSIER_PDF=dossier.pdf`, `DOSSIER_IMAP=INBOX`.
 
-   `SOURCES_TOUTES_ZONES=seloger` : toutes les annonces SeLoger sont gardées quel que soit le lieu
+   `SOURCES_TOUTES_ZONES=seloger,jinka` : toutes les annonces de ces sites sont gardées quel que soit le lieu
    (pratique avec une alerte « à 30 min de… ») ; seuls les prix max s'appliquent.
 
    Dans `ZONES` et `PRIORITES`, écrivez `Paris` pour les 20 arrondissements, `Paris 13e` pour un seul, ou le nom d'une commune
