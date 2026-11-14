@@ -256,7 +256,9 @@ class TestCycleComplet(unittest.TestCase):
             mock.patch.object(main.gmail, "envoyer_email"),
             mock.patch.object(main.telegram, "envoyer", side_effect=lambda *a, **k: 900 + len(self.envoyes())),
             mock.patch.object(main.telegram, "mises_a_jour", side_effect=self._faux_clics),
-            mock.patch.object(main.telegram, "envoyer_photos"),
+            mock.patch.object(main.telegram, "envoyer_photos", return_value=[801, 802]),
+            mock.patch.object(main.telegram, "supprimer_message"),
+            mock.patch.object(main.telegram, "demander_reponse", return_value=950),
             mock.patch.object(main.telegram, "repondre_clic"),
             mock.patch.object(main.telegram, "modifier_boutons"),
         ]
@@ -277,6 +279,57 @@ class TestCycleComplet(unittest.TestCase):
     def d(self, action, id_):
         """Donnée d'un bouton, avec la signature de l'annonce."""
         return main.donnee_bouton(self.db.annonce(id_), action)
+
+    def test_pas_interesse_supprime_le_message(self):
+        main.boucle(self.cfg, self.db, une_fois=True)
+        self.clics = [clic(1, self.d("refuser", 7), message_id=self.db.annonce(7)["message_id"])]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        supprimes = [c[0][2] for c in self.m["supprimer_message"].call_args_list]
+        # le résumé + les 2 photos de l'album (la coloc Montrouge a une photo dans l'email)
+        self.assertEqual(sorted(supprimes), sorted([self.db.annonce(7)["message_id"], 801, 802]))
+        self.assertEqual(self.db.annonce(7)["statut"], "pas intéressé")
+        self.assertEqual(self.m["repondre_clic"].call_args[0][2], "Annonce supprimée.")
+
+    def test_pas_interesse_message_trop_ancien(self):
+        main.boucle(self.cfg, self.db, une_fois=True)
+        self.m["supprimer_message"].side_effect = RuntimeError("message can't be deleted")
+        self.clics = [clic(1, self.d("refuser", 1), message_id=self.db.annonce(1)["message_id"])]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["modifier_boutons"].assert_called()   # on remplace les boutons à la place
+        self.assertEqual(self.m["repondre_clic"].call_args[0][2], "Annonce classée.")
+
+    def test_postuler_sans_email_demande_l_adresse(self):
+        main.boucle(self.cfg, self.db, une_fois=True)
+        # Ivry (n° 6) n'a pas d'email : Postuler demande l'adresse, rien n'est envoyé
+        self.clics = [clic(1, self.d("postuler", 6))]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["demander_reponse"].assert_called_once()
+        self.m["envoyer_email"].assert_not_called()
+        # réponse sans email -> on redemande
+        self.clics = [{"update_id": 2, "message": {"message_id": 951, "chat": {"id": 42}, "text": "euh",
+                                                   "reply_to_message": {"message_id": 950}}}]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["envoyer_email"].assert_not_called()
+        self.assertIn("pas trouvé d'adresse email", self.m["envoyer"].call_args[0][2])
+        # message d'un inconnu : ignoré
+        self.clics = [{"update_id": 3, "message": {"message_id": 952, "chat": {"id": 666},
+                                                   "text": "pirate@x.fr", "reply_to_message": {"message_id": 950}}}]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["envoyer_email"].assert_not_called()
+        # vraie réponse -> envoi immédiat à l'agence, une seule fois
+        self.clics = [{"update_id": 4, "message": {"message_id": 953, "chat": {"id": 42},
+                                                   "text": "C'est Agence.Martin@Immo.fr",
+                                                   "reply_to_message": {"message_id": 950}}}]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["envoyer_email"].assert_called_once()
+        self.assertEqual(self.m["envoyer_email"].call_args[0][2], "agence.martin@immo.fr")
+        self.assertEqual(self.db.annonce(6)["statut"], "dossier envoyé")
+        self.assertIn("Dossier envoyé à agence.martin@immo.fr", self.m["envoyer"].call_args[0][2])
+        self.clics = [{"update_id": 5, "message": {"message_id": 954, "chat": {"id": 42},
+                                                   "text": "agence.martin@immo.fr",
+                                                   "reply_to_message": {"message_id": 950}}}]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["envoyer_email"].assert_called_once()
 
     def test_bouton_perime(self):
         main.boucle(self.cfg, self.db, une_fois=True)
@@ -319,17 +372,18 @@ class TestCycleComplet(unittest.TestCase):
         self.assertIn("€/m²", textes[0])
         self.assertIn("🚇 M7 · RER C", ivry)
         self.assertIn("0 € de frais d'agence", ivry)  # PAP = particulier
-        # boutons : Postuler/Brouillon/Pas intéressé si email d'agence, sinon « J'ai postulé »
+        # boutons : Postuler partout ; Brouillon si email d'agence, sinon « Déjà postulé sur le site »
         seloger = self.envoyes()[1][1]["boutons"]
         self.assertEqual([d.rsplit(":", 1)[0] for ligne in seloger for _, d in ligne],
                          ["postuler:4", "brouillon:4", "refuser:4"])
         self.assertEqual(self.envoyes()[0][1]["boutons"][0][0][1], self.d("postuler", 1))
+        self.assertEqual(self.envoyes()[0][1]["boutons"][1][0][1], self.d("site", 1))
         self.m["envoyer_email"].assert_not_called()   # rien n'est envoyé sans appui
         self.m["creer_brouillon"].assert_not_called()
 
         # Appuis : Postuler (SeLoger) deux fois, Pas intéressé (Jinka), un intrus, J'ai postulé (Ivry)
         self.clics = [clic(1, self.d("postuler", 4)), clic(2, self.d("postuler", 4)), clic(3, self.d("refuser", 1)),
-                      clic(4, self.d("postuler", 6), chat=666), clic(5, self.d("postuler", 6))]
+                      clic(4, self.d("site", 6), chat=666), clic(5, self.d("site", 6))]
         main.traiter_boutons(self.cfg, self.db, 0)
         self.m["envoyer_email"].assert_called_once()
         args = self.m["envoyer_email"].call_args[0]

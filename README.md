@@ -24,8 +24,9 @@ Petit outil Python qui tourne sur votre ordinateur et, **toutes les 2 minutes** 
 |---|---|
 | **✅ Postuler (envoyer le dossier)** | Envoie **immédiatement** le message de `templates.md` + `dossier.pdf` à l'email de l'annonce, depuis la boîte Gmail dédiée. Si `EMAIL_REPONSE` est rempli, cette adresse est **en copie (Cc)** et reçoit les réponses de l'agence ; `NOM_EXPEDITEUR` affiche votre nom comme expéditeur. Statut : `dossier envoyé`. Si le PDF est introuvable, rien n'est envoyé. |
 | **📝 Brouillon Gmail** | Crée le même email dans vos **Brouillons** Gmail, pour le relire ou le modifier avant de l'envoyer vous-même. Statut : `brouillon créé`. |
-| **✅ J'ai postulé sur le site** | (annonces sans email) Note que vous avez postulé via le site. Statut : `postulé`. |
-| **❌ Pas intéressé** | Classe l'annonce : plus de rappel de relance. Statut : `pas intéressé`. |
+| **✅ Postuler**, annonce **sans email** | Le bot vous demande l'email de l'agence (visible sur l'annonce) : répondez-lui en collant l'adresse, et le dossier part aussitôt. |
+| **🌐 Déjà postulé sur le site** | (annonces sans email) Note que vous avez postulé via le formulaire du site. Statut : `postulé`. |
+| **❌ Pas intéressé** | **Supprime l'annonce de Telegram** (résumé + photos) et la classe : plus de rappel. Statut : `pas intéressé`. Au-delà de 48 h, Telegram n'autorise plus la suppression : les boutons sont alors remplacés. |
 
 Après un appui, les boutons sont remplacés par la décision (ex. « ✅ Dossier envoyé le 14/11 à 10:32 »).
 Seuls les appuis venant de **votre** compte Telegram (`TELEGRAM_CHAT_ID`) sont pris en compte.
@@ -301,7 +302,7 @@ vérifiez le total vous-même. Si rien n'est indiqué, le prix est considéré c
 
 **Contacts.** Les emails d'alerte contiennent rarement l'email ou le téléphone de l'annonceur
 (il faut souvent passer par le site). Dans ce cas, pas d'envoi possible : copiez le message reçu sur Telegram
-dans le formulaire de contact de l'annonce, puis appuyez sur « ✅ J'ai postulé sur le site ».
+dans le formulaire de contact de l'annonce, puis appuyez sur « 🌐 Déjà postulé sur le site ». Si l'annonce affiche un email, appuyez plutôt sur « ✅ Postuler » et donnez-le au bot.
 
 **Doublons.** Une annonce est considérée comme déjà vue si son lien est identique, ou si elle a la même
 ville, le même prix et la même surface (la même annonce reçue via Jinka et SeLoger n'est notifiée qu'une fois).

@@ -52,18 +52,33 @@ def envoyer(token: str, chat_id: str, texte_html: str,
     return _appel(token, "sendMessage", donnees)["message_id"]
 
 
-def envoyer_photos(token: str, chat_id: str, photos: List[str], legende: str = "") -> None:
+def envoyer_photos(token: str, chat_id: str, photos: List[str], legende: str = "") -> List[int]:
     """Envoie les photos de l'annonce (1 photo, ou un album de 2 à 10 photos).
 
     Ce sont les adresses d'images présentes dans l'email d'alerte : c'est Telegram
-    qui les télécharge et les affiche.
+    qui les télécharge et les affiche. Renvoie les numéros des messages (pour les supprimer).
     """
     if len(photos) == 1:
-        _appel(token, "sendPhoto", {"chat_id": chat_id, "photo": photos[0], "caption": legende[:1024]})
-    elif photos:
+        r = _appel(token, "sendPhoto", {"chat_id": chat_id, "photo": photos[0], "caption": legende[:1024]})
+        return [r["message_id"]]
+    if photos:
         album = [{"type": "photo", "media": url} for url in photos[:10]]
         album[0]["caption"] = legende[:1024]
-        _appel(token, "sendMediaGroup", {"chat_id": chat_id, "media": album})
+        return [m["message_id"] for m in _appel(token, "sendMediaGroup", {"chat_id": chat_id, "media": album})]
+    return []
+
+
+def demander_reponse(token: str, chat_id: str, texte_html: str, exemple: str = "") -> int:
+    """Envoie une question à laquelle Telegram propose directement de répondre."""
+    return _appel(token, "sendMessage", {
+        "chat_id": chat_id, "text": texte_html, "parse_mode": "HTML",
+        "reply_markup": {"force_reply": True, "input_field_placeholder": exemple[:64]},
+    })["message_id"]
+
+
+def supprimer_message(token: str, chat_id: str, message_id: int) -> None:
+    """Supprime un message du bot (possible pendant 48 h après son envoi)."""
+    _appel(token, "deleteMessage", {"chat_id": chat_id, "message_id": message_id})
 
 
 def mises_a_jour(token: str, offset: int, attente: int) -> list:

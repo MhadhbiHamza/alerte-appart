@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS annonces (
     photos              TEXT,                  -- liste JSON des photos de l'email
     verdict             TEXT,                  -- 🟢 À saisir / 🟡 Correct / 🔴 Bof
     note                REAL,                  -- note globale sur 5
-    essai               INTEGER DEFAULT 0      -- 1 = annonce notifiée pour essayer (envois vers vous)
+    essai               INTEGER DEFAULT 0,     -- 1 = annonce notifiée pour essayer (envois vers vous)
+    album_ids           TEXT                   -- numéros des messages photos (pour les supprimer)
 );
 CREATE TABLE IF NOT EXISTS etat (              -- petites valeurs à retenir entre deux lancements
     cle    TEXT PRIMARY KEY,
@@ -61,8 +62,10 @@ NOUVELLES_COLONNES = {
     "ville": "TEXT", "quartier": "TEXT", "colocation": "INTEGER DEFAULT 0", "photo": "TEXT",
     "message_id": "INTEGER", "statut": "TEXT", "candidature": "TEXT", "envoye_le": "TEXT",
     "texte": "TEXT", "photos": "TEXT", "verdict": "TEXT", "note": "REAL", "essai": "INTEGER DEFAULT 0",
+    "album_ids": "TEXT",
 }
-CHAMPS_MODIFIABLES = {"notifiee_le", "message_id", "statut", "candidature", "envoye_le", "brouillon", "verdict", "note"}
+CHAMPS_MODIFIABLES = {"notifiee_le", "message_id", "statut", "candidature", "envoye_le", "brouillon", "verdict", "note",
+                      "album_ids", "email_contact"}
 
 
 def maintenant() -> str:
