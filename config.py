@@ -24,7 +24,6 @@ class Config:
     telegram_chat_id: str
     prix_max: int
     zones: set
-    priorites: set
     expediteurs: list
     dossier_pdf: Path
     intervalle_secondes: int
@@ -52,7 +51,6 @@ ZONES_PAR_DEFAUT = (
     "Vitry-sur-Seine, Saint-Denis, Montreuil, Meudon, "
     "Vincennes, Charenton-le-Pont, Montrouge, Clichy, Boulogne-Billancourt, Issy-les-Moulineaux"
 )
-PRIORITES_PAR_DEFAUT = "Ivry-sur-Seine, Maisons-Alfort, Paris 13e, Paris 14e, Asnières-sur-Seine"
 
 
 def _zones(valeur: str, variable: str) -> set:
@@ -86,7 +84,6 @@ def charger_config() -> Config:
         telegram_chat_id=g("TELEGRAM_CHAT_ID", "").strip(),
         prix_max=int(g("PRIX_MAX_CC", "900")),
         zones=_zones(g("ZONES", ZONES_PAR_DEFAUT), "ZONES"),
-        priorites=_zones(g("PRIORITES", PRIORITES_PAR_DEFAUT), "PRIORITES"),
         expediteurs=_liste(g("EXPEDITEURS", "jinka,seloger,pap")),
         dossier_pdf=_chemin(g("DOSSIER_PDF", "dossier.pdf")),
         intervalle_secondes=int(g("INTERVALLE_SECONDES", "120")),

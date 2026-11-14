@@ -171,7 +171,7 @@ class TestCycleComplet(unittest.TestCase):
         pdf = tmp / "dossier.pdf"
         pdf.write_bytes(b"%PDF-1.4 test")
         cfg = Config("moi@gmail.com", "x", "INBOX", "tok", "42", 900,
-                     _zones(config.ZONES_PAR_DEFAUT, "ZONES"), {"Ivry-sur-Seine"},
+                     _zones(config.ZONES_PAR_DEFAUT, "ZONES"),
                      ["jinka", "seloger", "pap"], pdf, 120, 48, 2,
                      Path(__file__).parent.parent / "templates.md", tmp / "suivi.csv", tmp / "a.db")
         db = Stockage(cfg.fichier_db)
@@ -181,7 +181,7 @@ class TestCycleComplet(unittest.TestCase):
             # même annonce que la 1re de Jinka, reçue via PAP : doit être ignorée (doublon)
             ("INBOX:1:3", email_de("PAP <alerte@pap.fr>",
                                    texte="Paris 11e - 32 m²\n880 € CC\nhttps://www.pap.fr/annonces/r999")),
-            # banlieue prioritaire, avec un quartier de la liste
+            # banlieue, avec un quartier de la liste
             ("INBOX:1:4", email_de("PAP <alerte@pap.fr>",
                                    texte="Ivry-sur-Seine (94200) - 2 pièces 33 m², métro Mairie d'Ivry\n"
                                          "870 € CC\nhttps://www.pap.fr/annonces/r555")),
@@ -199,11 +199,9 @@ class TestCycleComplet(unittest.TestCase):
             # (SeLoger 17e : hors zone ; Jinka 14e : trop cher ; Jinka 20e : hors zone)
             self.assertEqual(envoyer.call_count, 3)
             ivry = envoyer.call_args_list[2][0][2]
-            self.assertIn("⭐", ivry)
             self.assertIn("📍 Ivry-sur-Seine · 33 m² · <b>870 € CC</b>", ivry)
             self.assertIn("Quartier repéré : Mairie d'Ivry", ivry)
             self.assertIn("à Ivry-sur-Seine, proposé à 870 €", ivry)
-            self.assertNotIn("⭐", envoyer.call_args_list[0][0][2])
             self.assertEqual(brouillon.call_count, 1)  # seule l'annonce SeLoger a un email d'agence
             args = brouillon.call_args[0]
             self.assertEqual(args[2], "contact@agence-dupont.fr")
@@ -217,7 +215,7 @@ class TestCycleComplet(unittest.TestCase):
             lignes = suivi._lire(cfg.fichier_csv)
             self.assertEqual(len(lignes), 3)
             self.assertEqual(lignes[0]["statut"], "nouveau")
-            self.assertTrue(lignes[2]["annonce"].startswith("⭐ Ivry-sur-Seine"))
+            self.assertTrue(lignes[2]["annonce"].startswith("Ivry-sur-Seine"))
 
             # Relance 48 h plus tard : on vieillit les dates, et on clôt une candidature
             db.db.execute("UPDATE annonces SET notifiee_le='2000-01-01T00:00:00'")
