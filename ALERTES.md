@@ -2,7 +2,7 @@
 
 Comptez environ 20 minutes en tout. L'idée est de faire **le moins d'alertes possible** en mettant plusieurs
 villes dans la même alerte. L'outil se charge ensuite du tri fin : prix charges comprises, zones exactes,
-doublons entre sites.
+doublons entre sites, priorités ⭐.
 
 ## Avant de commencer
 
@@ -16,13 +16,16 @@ doublons entre sites.
 
 ## Les villes, regroupées en 3 alertes par site
 
-**Alerte 1 : Paris intramuros**
-- Paris 15e (75015), Paris 14e (75014), Paris 12e (75012)
-- Paris 13e (75013), Paris 11e (75011)
+**Alerte 1 : vos priorités** ⭐
+- Ivry-sur-Seine (94200)
+- Maisons-Alfort (94700)
+- Paris 13e (75013)
+- Paris 14e (75014)
+- Asnières-sur-Seine (92600)
 
-**Alerte 2 : proche banlieue**
-- Ivry-sur-Seine (94200), Maisons-Alfort (94700), Clamart (92140)
-- Asnières-sur-Seine (92600), Bois-Colombes (92270), Vitry-sur-Seine (94400)
+**Alerte 2 : le reste de votre liste principale**
+- Paris 15e (75015), Paris 12e (75012), Paris 11e (75011)
+- Clamart (92140), Bois-Colombes (92270), Vitry-sur-Seine (94400)
 - Saint-Denis (93200), Montreuil (93100), Meudon (92190)
 
 **Alerte 3 : options secondaires**

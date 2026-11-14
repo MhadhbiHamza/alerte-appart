@@ -4,7 +4,7 @@ Petit outil Python qui tourne sur votre ordinateur et, **toutes les 2 minutes** 
 
 1. lit les nouveaux emails d'alerte **Jinka, SeLoger et PAP** arrivés dans une boîte Gmail dédiée (IMAP) ;
 2. extrait de chaque annonce : prix charges comprises, surface, ville ou arrondissement, lien, et email ou téléphone s'il y en a un ;
-3. ne garde que les annonces **≤ 900 € CC** dans **vos zones** (5 arrondissements et 15 communes de proche banlieue, réglables dans `.env`), et ignore les doublons ;
+3. ne garde que les annonces **≤ 900 € CC** dans **vos zones** (5 arrondissements et 15 communes de proche banlieue, réglables dans `.env`), signale par ⭐ vos **zones prioritaires**, et ignore les doublons ;
 4. remplit votre modèle de candidature (`templates.md`) ;
 5. vous envoie une **notification Telegram** avec l'annonce, son lien et le message prêt à copier ;
 6. si l'annonce donne l'email de l'agence, crée un **brouillon Gmail** avec votre dossier PDF en pièce jointe ;
@@ -143,10 +143,10 @@ Google n'autorise pas un programme à utiliser votre mot de passe habituel. Il f
    | `TELEGRAM_CHAT_ID` | `123456789` | étape 4 |
 
 3. Les autres réglages ont déjà les bonnes valeurs, modifiables si besoin :
-   `PRIX_MAX_CC=900`, `ZONES=…` (vos 20 zones),
+   `PRIX_MAX_CC=900`, `ZONES=…` (vos 20 zones), `PRIORITES=…` (vos 5 priorités, marquées ⭐),
    `RELANCE_HEURES=48`, `INTERVALLE_SECONDES=120`, `DOSSIER_PDF=dossier.pdf`, `DOSSIER_IMAP=INBOX`.
 
-   Dans `ZONES`, écrivez `Paris 13e` pour un arrondissement, ou le nom d'une commune
+   Dans `ZONES` et `PRIORITES`, écrivez `Paris 13e` pour un arrondissement, ou le nom d'une commune
    (`Ivry-sur-Seine`, `Asnieres`… les accents et majuscules ne comptent pas). Les communes reconnues sont
    listées dans `zones.py` ; pour en ajouter une, ajoutez une ligne dans `COMMUNES` (nom + code postal).
    Si un nom n'est pas reconnu, l'outil le dit au démarrage.
