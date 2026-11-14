@@ -72,7 +72,8 @@ def traiter_nouveaux_emails(cfg: Config, db: Stockage, imap) -> None:
             if db.deja_vue(a):
                 log.info("  doublon ignoré : %s", a.lien[:80])
                 continue
-            retenue, raison = extraction.est_eligible(a, cfg.prix_max, cfg.zones, cfg.prix_max_coloc)
+            retenue, raison = extraction.est_eligible(a, cfg.prix_max, cfg.zones, cfg.prix_max_coloc,
+                                                    a.source.lower() in cfg.sources_toutes_zones)
             db.ajouter(a, retenue, raison)
             log.info("  %s %s%s € / %s m² / %s -> %s", "✅" if retenue else "❌",
                      "coloc " if a.colocation else "", a.prix_cc, a.surface, a.ville, raison)
@@ -452,7 +453,8 @@ def commande_analyser(cfg: Config) -> None:
         for _, msg in gmail.lire_emails(imap, cfg.dossier_imap, cfg.expediteurs, cfg.jours_historique):
             print(f"\n=== {msg.get('Date')} | {msg.get('From')} | {msg.get('Subject')}")
             for a in extraction.extraire_annonces(msg, a_exclure={cfg.gmail_adresse.lower()}):
-                ok, raison = extraction.est_eligible(a, cfg.prix_max, cfg.zones, cfg.prix_max_coloc)
+                ok, raison = extraction.est_eligible(a, cfg.prix_max, cfg.zones, cfg.prix_max_coloc,
+                                                    a.source.lower() in cfg.sources_toutes_zones)
                 print(f"  {'✅' if ok else '❌'} {'COLOC ' if a.colocation else ''}{a.prix_cc} € | "
                       f"{a.surface} m² | {a.ville} | {a.email_contact or a.telephone or '-'} | {raison}\n"
                       f"     {a.lien[:100]}\n     photos : {len(a.photos)}")

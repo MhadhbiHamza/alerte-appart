@@ -37,6 +37,7 @@ class Config:
     email_reponse: str = ""
     nom_expediteur: str = ""
     revenu_net_mensuel: int = 0
+    sources_toutes_zones: set = frozenset()
 
 
 def _chemin(valeur: str) -> Path:
@@ -51,7 +52,7 @@ def _liste(valeur: str) -> list:
 
 
 ZONES_PAR_DEFAUT = (
-    "Paris 15e, Paris 14e, Paris 12e, Paris 13e, Paris 11e, "
+    "Paris, "  # = les 20 arrondissements
     "Ivry-sur-Seine, Maisons-Alfort, Clamart, Asnières-sur-Seine, Bois-Colombes, "
     "Vitry-sur-Seine, Saint-Denis, Montreuil, Meudon, "
     "Vincennes, Charenton-le-Pont, Montrouge, Clichy, Boulogne-Billancourt, Issy-les-Moulineaux"
@@ -63,6 +64,9 @@ def _zones(valeur: str, variable: str) -> set:
     """« Paris 13, asnieres » -> {"Paris 13e", "Asnières-sur-Seine"} (erreur claire si inconnu)."""
     resultat, inconnues = set(), []
     for nom in _liste(valeur):
+        if zones.simplifier(nom).strip() in ("paris", "tout paris", "paris intramuros"):
+            resultat.update(zones.libelle_paris(n) for n in range(1, 21))  # tout Paris
+            continue
         zone = zones.normaliser_zone(nom)
         if zone:
             resultat.add(zone)
@@ -71,7 +75,7 @@ def _zones(valeur: str, variable: str) -> set:
     if inconnues:
         raise SystemExit(
             f"{variable} dans .env : zone(s) inconnue(s) : {', '.join(inconnues)}\n"
-            "Écrivez « Paris 13e » pour un arrondissement, ou une de ces communes : "
+            "Écrivez « Paris » (tout Paris), « Paris 13e » pour un arrondissement, ou une de ces communes : "
             + ", ".join(zones.COMMUNES) + "\n(pour une autre commune, ajoutez-la dans zones.py)"
         )
     return resultat
@@ -103,6 +107,8 @@ def charger_config() -> Config:
         email_reponse=g("EMAIL_REPONSE", "").strip(),
         nom_expediteur=g("NOM_EXPEDITEUR", "").strip(),
         revenu_net_mensuel=int(g("REVENU_NET_MENSUEL", "0") or 0),
+        # Sites dont vous gardez TOUTES les annonces, quel que soit le lieu (ex. alerte « 30 min de… »)
+        sources_toutes_zones={s.lower() for s in _liste(g("SOURCES_TOUTES_ZONES", "seloger"))},
     )
 
 

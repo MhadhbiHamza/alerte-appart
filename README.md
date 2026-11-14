@@ -203,7 +203,10 @@ Google n'autorise pas un programme à utiliser votre mot de passe habituel. Il f
    `PRIX_MAX_CC=900`, `PRIX_MAX_COLOC=600`, `REVENU_NET_MENSUEL=…` (facultatif), `ZONES=…` (vos 20 zones), `PRIORITES=…` (vos 5 priorités, marquées ⭐),
    `RELANCE_HEURES=48`, `INTERVALLE_SECONDES=120`, `DOSSIER_PDF=dossier.pdf`, `DOSSIER_IMAP=INBOX`.
 
-   Dans `ZONES` et `PRIORITES`, écrivez `Paris 13e` pour un arrondissement, ou le nom d'une commune
+   `SOURCES_TOUTES_ZONES=seloger` : toutes les annonces SeLoger sont gardées quel que soit le lieu
+   (pratique avec une alerte « à 30 min de… ») ; seuls les prix max s'appliquent.
+
+   Dans `ZONES` et `PRIORITES`, écrivez `Paris` pour les 20 arrondissements, `Paris 13e` pour un seul, ou le nom d'une commune
    (`Ivry-sur-Seine`, `Asnieres`… les accents et majuscules ne comptent pas). Les communes reconnues sont
    listées dans `zones.py` ; pour en ajouter une, ajoutez une ligne dans `COMMUNES` (nom + code postal).
    Si un nom n'est pas reconnu, l'outil le dit au démarrage.

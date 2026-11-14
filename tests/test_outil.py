@@ -144,9 +144,22 @@ class TestZones(unittest.TestCase):
     def test_normalisation_env(self):
         self.assertEqual(_zones("paris 13, 75014, Paris 15ème, asnieres, ivry sur seine", "ZONES"),
                          {"Paris 13e", "Paris 14e", "Paris 15e", "Asnières-sur-Seine", "Ivry-sur-Seine"})
-        self.assertEqual(len(_zones(config.ZONES_PAR_DEFAUT, "ZONES")), 20)
+        self.assertEqual(len(_zones(config.ZONES_PAR_DEFAUT, "ZONES")), 35)  # 20 arrondissements + 15 communes
         with self.assertRaises(SystemExit):
             _zones("Paris 13e, Levallois", "ZONES")
+
+    def test_tout_paris_et_seloger(self):
+        tout = _zones("Paris, Ivry-sur-Seine", "ZONES")
+        self.assertEqual(len(tout), 21)
+        self.assertIn("Paris 1er", tout)
+        self.assertIn("Paris 20e", tout)
+        a = extraction.Annonce("SeLoger", "l", "", prix_cc=850, surface=30, ville="autre commune (92700)")
+        self.assertFalse(extraction.est_eligible(a, 900, tout)[0])
+        self.assertEqual(extraction.est_eligible(a, 900, tout, 600, toutes_zones=True), (True, "ok"))
+        a.ville = None
+        self.assertTrue(extraction.est_eligible(a, 900, tout, 600, toutes_zones=True)[0])
+        a.prix_cc = 950   # le prix max s'applique toujours
+        self.assertFalse(extraction.est_eligible(a, 900, tout, 600, toutes_zones=True)[0])
 
     def test_quartier(self):
         self.assertEqual(zones.detecter_quartier("Studio métro Alésia", "Paris 14e"), "Alésia")
@@ -199,6 +212,12 @@ class TestColocationEtPhoto(unittest.TestCase):
         self.assertNotIn("colocation", modele.charger(chemin)[0].lower())
 
 
+# Zones du scénario de test : 5 arrondissements + 15 communes (comme avant « tout Paris »)
+ZONES_SCENARIO = ("Paris 15e, Paris 14e, Paris 12e, Paris 13e, Paris 11e, Ivry-sur-Seine, Maisons-Alfort, Clamart, "
+                  "Asnières-sur-Seine, Bois-Colombes, Vitry-sur-Seine, Saint-Denis, Montreuil, Meudon, Vincennes, "
+                  "Charenton-le-Pont, Montrouge, Clichy, Boulogne-Billancourt, Issy-les-Moulineaux")
+
+
 def clic(id_clic, data, chat=42, message_id=900):
     return {"update_id": id_clic, "callback_query": {
         "id": f"c{id_clic}", "data": data, "message": {"message_id": message_id, "chat": {"id": chat}}}}
@@ -212,7 +231,7 @@ class TestCycleComplet(unittest.TestCase):
         self.pdf = self.tmp / "dossier.pdf"
         self.pdf.write_bytes(b"%PDF-1.4 test")
         self.cfg = Config("moi@gmail.com", "x", "INBOX", "tok", "42", 900,
-                          _zones(config.ZONES_PAR_DEFAUT, "ZONES"), {"Ivry-sur-Seine"},
+                          _zones(ZONES_SCENARIO, "ZONES"), {"Ivry-sur-Seine"},
                           ["jinka", "seloger", "pap"], self.pdf, 120, 48, 2,
                           Path(__file__).parent.parent / "templates.md", self.tmp / "suivi.csv",
                           self.tmp / "a.db", 600)
@@ -360,6 +379,13 @@ class TestCycleComplet(unittest.TestCase):
         self.db.db.execute("UPDATE annonces SET notifiee_le='2000-01-01T00:00:00'")
         self.db.db.commit()
         self.assertTrue(all(not r["essai"] for r in self.db.a_relancer(48)))
+
+    def test_seloger_hors_zone_accepte(self):
+        self.cfg.sources_toutes_zones = {"seloger"}
+        main.boucle(self.cfg, self.db, une_fois=True)
+        # en plus des 4 habituelles : SeLoger Paris 17e (hors des zones du scénario) est gardée
+        self.assertEqual(len(self.envoyes()), 5)
+        self.assertTrue(any("Paris 17e" in c[0][2] for c in self.envoyes()))
 
     def test_photos_refusees_par_telegram(self):
         self.m["envoyer_photos"].side_effect = RuntimeError("Bad Request: wrong file identifier")

@@ -136,7 +136,7 @@ def frais_agence_max(surface: Optional[float]) -> Optional[int]:
 
 # Note « emplacement » de base, d'après vos groupes de villes (les priorités valent 5/5).
 EMPLACEMENT = {
-    **{f"Paris {n}e": 4 for n in (11, 12, 13, 14, 15)},
+    **{zones.libelle_paris(n): 4 for n in range(1, 21)},  # tout Paris
     **{v: 3 for v in ("Ivry-sur-Seine", "Maisons-Alfort", "Clamart", "Asnières-sur-Seine", "Bois-Colombes",
                       "Vitry-sur-Seine", "Saint-Denis", "Montreuil", "Meudon")},
     **{v: 2 for v in ("Vincennes", "Charenton-le-Pont", "Montrouge", "Clichy", "Boulogne-Billancourt",
@@ -145,7 +145,7 @@ EMPLACEMENT = {
 # Note « transports » : métros + RER = 5 ; métro + train = 4 ; une seule ligne de métro = 3 ;
 # seulement RER / train / tram = 2.
 NOTE_TRANSPORTS = {
-    **{f"Paris {n}e": 5 for n in (11, 12, 13, 14, 15)},
+    **{zones.libelle_paris(n): 5 for n in range(1, 21)},  # métro dense partout dans Paris
     **{v: 4 for v in ("Saint-Denis", "Ivry-sur-Seine", "Maisons-Alfort", "Asnières-sur-Seine", "Montreuil",
                       "Vincennes", "Boulogne-Billancourt", "Issy-les-Moulineaux")},
     **{v: 3 for v in ("Charenton-le-Pont", "Montrouge", "Clichy")},
@@ -299,7 +299,8 @@ def analyser(annonce, prix_m2_zone: List[float], prioritaire: bool = False,
         contre.append(f"{d.etage}e étage sans ascenseur"); note_logement -= 1
 
     # --- Emplacement et transports ----------------------------------------------
-    ligne = f"🚇 {TRANSPORTS.get(ville, 'lignes : voir le plan')}"
+    defaut = "métro dense (Paris intramuros)" if (ville or "").startswith("Paris") else "lignes : voir le plan"
+    ligne = f"🚇 {TRANSPORTS.get(ville, defaut)}"
     if d.transports_cites:
         ligne += " — cité : " + ", ".join(d.transports_cites)
     lignes.append(ligne)

@@ -333,19 +333,20 @@ def extraire_annonces(msg: EmailMessage, a_exclure=()) -> List[Annonce]:
 
 
 def est_eligible(a: Annonce, prix_max: int, zones_voulues: set,
-                 prix_max_coloc: Optional[int] = None) -> Tuple[bool, str]:
+                 prix_max_coloc: Optional[int] = None, toutes_zones: bool = False) -> Tuple[bool, str]:
     """Applique vos critères. Renvoie (gardée ?, raison).
 
     Les colocations ont leur propre prix maximum (PRIX_MAX_COLOC).
+    toutes_zones=True : le lieu n'est pas vérifié (sites listés dans SOURCES_TOUTES_ZONES).
     """
     if a.colocation and prix_max_coloc is not None:
         prix_max = prix_max_coloc
     if a.prix_cc is None:
         return False, "prix introuvable"
-    if a.ville is None:
+    if a.ville is None and not toutes_zones:
         return False, "ville introuvable"
     if a.prix_cc > prix_max:
         return False, f"trop cher ({a.prix_cc} €{' en colocation' if a.colocation else ''})"
-    if a.ville not in zones_voulues:
+    if a.ville not in zones_voulues and not toutes_zones:
         return False, f"hors zone ({a.ville})"
     return True, "ok"
