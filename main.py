@@ -19,6 +19,7 @@ Garanties :
     et jamais deux fois pour la même annonce.
 """
 import argparse
+import hashlib
 import imaplib
 import json
 import logging
@@ -100,12 +101,25 @@ def destinataire(cfg: Config, annonce) -> str:
     return annonce["email_contact"] or ""
 
 
+def jeton(annonce) -> str:
+    """Signature propre à une annonce, ajoutée à ses boutons.
+
+    Si annonces.db est supprimée, les numéros repartent de 1 : sans cette signature, un bouton
+    d'un ANCIEN message pourrait agir sur une NOUVELLE annonce portant le même numéro.
+    """
+    return hashlib.sha1(f"{annonce['empreinte']}|{annonce['vue_le']}".encode()).hexdigest()[:8]
+
+
+def donnee_bouton(annonce, action: str) -> str:
+    return f"{action}:{annonce['id']}:{jeton(annonce)}"
+
+
 def boutons_annonce(annonce) -> telegram.Boutons:
-    id_ = annonce["id"]
+    d = lambda action: donnee_bouton(annonce, action)  # noqa: E731
     if annonce["email_contact"] or annonce["essai"]:
-        return [[("✅ Postuler (envoyer le dossier)", f"postuler:{id_}")],
-                [("📝 Brouillon Gmail", f"brouillon:{id_}"), ("❌ Pas intéressé", f"refuser:{id_}")]]
-    return [[("✅ J'ai postulé sur le site", f"postuler:{id_}"), ("❌ Pas intéressé", f"refuser:{id_}")]]
+        return [[("✅ Postuler (envoyer le dossier)", d("postuler"))],
+                [("📝 Brouillon Gmail", d("brouillon")), ("❌ Pas intéressé", d("refuser"))]]
+    return [[("✅ J'ai postulé sur le site", d("postuler")), ("❌ Pas intéressé", d("refuser"))]]
 
 
 def analyser(cfg: Config, db: Stockage, annonce) -> analyse.Analyse:
@@ -229,13 +243,14 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
     if chat != str(cfg.telegram_chat_id):  # sécurité : seuls VOS appuis comptent
         telegram.repondre_clic(token, clic["id"], "Non autorisé.")
         return
-    action, _, id_texte = clic.get("data", "").partition(":")
+    action, id_texte, signature = (clic.get("data", "").split(":") + ["", ""])[:3]
     if action == "rien" or not id_texte.isdigit():
         telegram.repondre_clic(token, clic["id"])
         return
     annonce = db.annonce(int(id_texte))
-    if annonce is None:
-        telegram.repondre_clic(token, clic["id"], "Annonce inconnue.")
+    if annonce is None or signature != jeton(annonce):
+        telegram.repondre_clic(token, clic["id"], "Bouton périmé (ancien message) : rien n'a été fait. "
+                               "Utilisez la notification la plus récente.", alerte=True)
         return
     if annonce["envoye_le"]:  # protection contre le double envoi
         telegram.repondre_clic(token, clic["id"], f"Dossier déjà envoyé le {_date(annonce['envoye_le'])}.")

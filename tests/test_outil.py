@@ -274,6 +274,19 @@ class TestCycleComplet(unittest.TestCase):
     def envoyes(self):
         return self.m["envoyer"].call_args_list
 
+    def d(self, action, id_):
+        """Donnée d'un bouton, avec la signature de l'annonce."""
+        return main.donnee_bouton(self.db.annonce(id_), action)
+
+    def test_bouton_perime(self):
+        main.boucle(self.cfg, self.db, une_fois=True)
+        # ancien format (sans signature) ou signature d'une autre annonce : rien n'est fait
+        self.clics = [clic(1, "postuler:4"), clic(2, "postuler:4:deadbeef")]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["envoyer_email"].assert_not_called()
+        self.assertIsNone(self.db.annonce(4)["statut"])
+        self.assertIn("Bouton périmé", self.m["repondre_clic"].call_args[0][2])
+
     def test_parcours_complet(self):
         main.boucle(self.cfg, self.db, une_fois=True)
         # n° des annonces : rejetées comprises (SeLoger 15e = 4, Ivry = 6, coloc Montrouge = 7)
@@ -308,14 +321,15 @@ class TestCycleComplet(unittest.TestCase):
         self.assertIn("0 € de frais d'agence", ivry)  # PAP = particulier
         # boutons : Postuler/Brouillon/Pas intéressé si email d'agence, sinon « J'ai postulé »
         seloger = self.envoyes()[1][1]["boutons"]
-        self.assertEqual([d for ligne in seloger for _, d in ligne], ["postuler:4", "brouillon:4", "refuser:4"])
-        self.assertEqual(self.envoyes()[0][1]["boutons"][0][0][1], "postuler:1")
+        self.assertEqual([d.rsplit(":", 1)[0] for ligne in seloger for _, d in ligne],
+                         ["postuler:4", "brouillon:4", "refuser:4"])
+        self.assertEqual(self.envoyes()[0][1]["boutons"][0][0][1], self.d("postuler", 1))
         self.m["envoyer_email"].assert_not_called()   # rien n'est envoyé sans appui
         self.m["creer_brouillon"].assert_not_called()
 
         # Appuis : Postuler (SeLoger) deux fois, Pas intéressé (Jinka), un intrus, J'ai postulé (Ivry)
-        self.clics = [clic(1, "postuler:4"), clic(2, "postuler:4"), clic(3, "refuser:1"),
-                      clic(4, "postuler:6", chat=666), clic(5, "postuler:6")]
+        self.clics = [clic(1, self.d("postuler", 4)), clic(2, self.d("postuler", 4)), clic(3, self.d("refuser", 1)),
+                      clic(4, self.d("postuler", 6), chat=666), clic(5, self.d("postuler", 6))]
         main.traiter_boutons(self.cfg, self.db, 0)
         self.m["envoyer_email"].assert_called_once()
         args = self.m["envoyer_email"].call_args[0]
@@ -354,7 +368,7 @@ class TestCycleComplet(unittest.TestCase):
         self.assertIn("relancez l'agence", rappels[0][0][2])
         self.assertIsNone(rappels[0][1]["boutons"])
         self.assertIn("pas encore répondu", rappels[2][0][2])
-        self.assertEqual(rappels[2][1]["boutons"][0][0][1], "postuler:7")
+        self.assertEqual(rappels[2][1]["boutons"][0][0][1], self.d("postuler", 7))
 
     def test_mode_essai(self):
         self.cfg.email_reponse = "moi@perso.fr"
@@ -368,8 +382,8 @@ class TestCycleComplet(unittest.TestCase):
         self.assertIn("🧪 <b>ESSAI</b>", essais[0][0][2])
         self.assertIn("moi@perso.fr", essais[0][0][2])
         # boutons d'envoi présents même sans email d'annonceur
-        self.assertEqual(essais[0][1]["boutons"][0][0][1], f"postuler:{ids[0]}")
-        self.clics = [clic(1, f"postuler:{ids[0]}")]
+        self.assertEqual(essais[0][1]["boutons"][0][0][1], self.d("postuler", ids[0]))
+        self.clics = [clic(1, self.d("postuler", ids[0]))]
         main.traiter_boutons(self.cfg, self.db, 0)
         args = self.m["envoyer_email"].call_args[0]
         self.assertEqual(args[2], "moi@perso.fr")          # jamais l'annonceur
@@ -396,11 +410,11 @@ class TestCycleComplet(unittest.TestCase):
     def test_brouillon_et_pdf_manquant(self):
         main.boucle(self.cfg, self.db, une_fois=True)
         self.pdf.unlink()
-        self.clics = [clic(1, "postuler:4")]
+        self.clics = [clic(1, self.d("postuler", 4))]
         main.traiter_boutons(self.cfg, self.db, 0)
         self.m["envoyer_email"].assert_not_called()
         self.assertIn("Dossier PDF introuvable", self.m["repondre_clic"].call_args[0][2])
-        self.clics = [clic(2, "brouillon:4")]
+        self.clics = [clic(2, self.d("brouillon", 4))]
         main.traiter_boutons(self.cfg, self.db, 0)
         self.m["creer_brouillon"].assert_called_once()
         self.assertEqual(self.m["creer_brouillon"].call_args[0][2], "contact@agence-dupont.fr")
