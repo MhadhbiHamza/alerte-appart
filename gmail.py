@@ -93,11 +93,19 @@ def dossier_brouillons(imap: imaplib.IMAP4_SSL) -> str:
 
 
 def construire_email(expediteur: str, destinataire: str, objet: str, corps: str,
-                     piece_jointe: Optional[Path]) -> EmailMessage:
-    """Prépare l'email de candidature, avec le dossier PDF en pièce jointe."""
+                     piece_jointe: Optional[Path], email_reponse: str = "") -> EmailMessage:
+    """Prépare l'email de candidature, avec le dossier PDF en pièce jointe.
+
+    email_reponse (votre adresse perso, facultatif) :
+      - « Répondre à » : les réponses de l'agence arrivent sur cette adresse ;
+      - copie cachée : vous y recevez aussi la candidature envoyée.
+    """
     msg = EmailMessage()
     msg["From"] = expediteur
     msg["To"] = destinataire
+    if email_reponse:
+        msg["Reply-To"] = email_reponse
+        msg["Bcc"] = email_reponse  # retiré automatiquement de l'email reçu par l'agence
     msg["Subject"] = objet
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid()
@@ -114,9 +122,9 @@ def construire_email(expediteur: str, destinataire: str, objet: str, corps: str,
 
 
 def creer_brouillon(imap: imaplib.IMAP4_SSL, expediteur: str, destinataire: str, objet: str,
-                    corps: str, piece_jointe: Optional[Path]) -> None:
+                    corps: str, piece_jointe: Optional[Path], email_reponse: str = "") -> None:
     """Dépose un brouillon (avec le PDF en pièce jointe) dans Gmail. N'envoie rien."""
-    msg = construire_email(expediteur, destinataire, objet, corps, piece_jointe)
+    msg = construire_email(expediteur, destinataire, objet, corps, piece_jointe, email_reponse)
     dossier = _guillemets(dossier_brouillons(imap))
     typ, reponse = imap.append(dossier, "(\\Draft)", imaplib.Time2Internaldate(time.time()), msg.as_bytes())
     if typ != "OK":
@@ -124,9 +132,9 @@ def creer_brouillon(imap: imaplib.IMAP4_SSL, expediteur: str, destinataire: str,
 
 
 def envoyer_email(adresse: str, mot_de_passe: str, destinataire: str, objet: str,
-                  corps: str, piece_jointe: Path) -> None:
+                  corps: str, piece_jointe: Path, email_reponse: str = "") -> None:
     """Envoie la candidature (appelée uniquement après un appui sur « ✅ Postuler »)."""
-    msg = construire_email(adresse, destinataire, objet, corps, piece_jointe)
+    msg = construire_email(adresse, destinataire, objet, corps, piece_jointe, email_reponse)
     with smtplib.SMTP_SSL(SERVEUR_SMTP, 465, timeout=30) as smtp:
         smtp.login(adresse, mot_de_passe)
         smtp.send_message(msg)

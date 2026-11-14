@@ -34,6 +34,7 @@ class Config:
     fichier_csv: Path
     fichier_db: Path
     prix_max_coloc: int = 600
+    email_reponse: str = ""
 
 
 def _chemin(valeur: str) -> Path:
@@ -97,6 +98,7 @@ def charger_config() -> Config:
         fichier_csv=_chemin(g("FICHIER_SUIVI", "suivi.csv")),
         fichier_db=_chemin(g("FICHIER_DB", "annonces.db")),
         prix_max_coloc=int(g("PRIX_MAX_COLOC", "600")),
+        email_reponse=g("EMAIL_REPONSE", "").strip(),
     )
 
 

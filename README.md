@@ -22,7 +22,7 @@ Petit outil Python qui tourne sur votre ordinateur et, **toutes les 2 minutes** 
 
 | Bouton | Ce qu'il fait |
 |---|---|
-| **✅ Postuler (envoyer le dossier)** | Envoie **immédiatement** le message de `templates.md` + `dossier.pdf` à l'email de l'annonce. Statut : `dossier envoyé`. Si le PDF est introuvable, rien n'est envoyé. |
+| **✅ Postuler (envoyer le dossier)** | Envoie **immédiatement** le message de `templates.md` + `dossier.pdf` à l'email de l'annonce, depuis la boîte Gmail dédiée. Si `EMAIL_REPONSE` est rempli, l'agence répond sur cette adresse et vous y recevez une copie. Statut : `dossier envoyé`. Si le PDF est introuvable, rien n'est envoyé. |
 | **📝 Brouillon Gmail** | Crée le même email dans vos **Brouillons** Gmail, pour le relire ou le modifier avant de l'envoyer vous-même. Statut : `brouillon créé`. |
 | **✅ J'ai postulé sur le site** | (annonces sans email) Note que vous avez postulé via le site. Statut : `postulé`. |
 | **❌ Pas intéressé** | Classe l'annonce : plus de rappel de relance. Statut : `pas intéressé`. |
@@ -182,7 +182,8 @@ Le fichier `.env` contient vos secrets : ne l'envoyez à personne et ne le publi
 
 1. Ouvrez `templates.md` et adaptez le texte sous **`## Objet`** et **`## Message`**
    (présentation, revenus, garant, signature…). Les variables `{prix}`, `{surface}`,
-   `{ville}`, `{quartier}`, `{lien}`, `{source}`, `{contact}` sont remplacées automatiquement.
+   `{ville}`, `{quartier}`, `{lien}`, `{source}`, `{contact}` sont remplacées automatiquement,
+   ainsi que `{mon_email}` (votre `EMAIL_REPONSE`, à mettre par exemple dans la signature).
    Le fichier est relu à chaque annonce : pas besoin de relancer l'outil après une modification.
 2. Fusionnez votre dossier de location en **un seul PDF** et placez-le dans le dossier du projet
    sous le nom `dossier.pdf` (ou indiquez son chemin dans `DOSSIER_PDF`).

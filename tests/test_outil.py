@@ -356,6 +356,27 @@ class TestReseau(unittest.TestCase):
 
 
 class TestGmail(unittest.TestCase):
+    def test_email_reponse(self):
+        pdf = Path(tempfile.mkdtemp()) / "dossier.pdf"
+        pdf.write_bytes(b"%PDF")
+        msg = main.gmail.construire_email("boite@gmail.com", "agence@x.fr", "Objet", "Corps", pdf, "perso@y.fr")
+        self.assertEqual((msg["From"], msg["To"], msg["Reply-To"], msg["Bcc"]),
+                         ("boite@gmail.com", "agence@x.fr", "perso@y.fr", "perso@y.fr"))
+        sans = main.gmail.construire_email("boite@gmail.com", "agence@x.fr", "Objet", "Corps", pdf)
+        self.assertIsNone(sans["Reply-To"])
+        # smtplib retire la ligne Bcc avant l'envoi : l'agence ne voit pas la copie
+        envoye = []
+
+        class FauxSMTP:
+            def __init__(self, *a, **k): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def login(self, *a): pass
+            def send_message(self, m): envoye.append(m)
+        with mock.patch.object(main.gmail.smtplib, "SMTP_SSL", FauxSMTP):
+            main.gmail.envoyer_email("boite@gmail.com", "mdp", "agence@x.fr", "O", "C", pdf, "perso@y.fr")
+        self.assertEqual(envoye[0]["Reply-To"], "perso@y.fr")
+
     def test_critere(self):
         c = main.gmail.critere_recherche(["jinka", "seloger", "pap"], 0)
         self.assertTrue(c.startswith('(OR OR FROM "jinka" FROM "seloger" FROM "pap") SINCE '))

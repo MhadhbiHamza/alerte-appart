@@ -84,6 +84,7 @@ def traiter_nouveaux_emails(cfg: Config, db: Stockage, imap) -> None:
 def preparer_candidature(cfg: Config, annonce):
     """Renvoie (objet, message) remplis à partir de templates.md."""
     valeurs = modele.valeurs_annonce(annonce)
+    valeurs["mon_email"] = cfg.email_reponse or cfg.gmail_adresse  # pour votre signature
     objet, message = modele.charger(cfg.fichier_modele, colocation=bool(annonce["colocation"]))
     return modele.remplir(objet, valeurs), modele.remplir(message, valeurs)
 
@@ -197,7 +198,8 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
         pdf = cfg.dossier_pdf if cfg.dossier_pdf.is_file() else None
         imap = gmail.connexion(cfg.gmail_adresse, cfg.gmail_mot_de_passe)
         try:
-            gmail.creer_brouillon(imap, cfg.gmail_adresse, annonce["email_contact"], objet, message, pdf)
+            gmail.creer_brouillon(imap, cfg.gmail_adresse, annonce["email_contact"], objet, message, pdf,
+                                  cfg.email_reponse)
         finally:
             imap.logout()
         _decision(cfg, db, annonce, clic, "brouillon créé", "brouillon Gmail",
@@ -210,7 +212,7 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
             return
         objet, message = preparer_candidature(cfg, annonce)
         gmail.envoyer_email(cfg.gmail_adresse, cfg.gmail_mot_de_passe, annonce["email_contact"],
-                            objet, message, cfg.dossier_pdf)
+                            objet, message, cfg.dossier_pdf, cfg.email_reponse)
         quand = maintenant()
         db.maj(annonce["id"], envoye_le=quand)
         log.info("📨 Dossier envoyé à %s (annonce #%d)", annonce["email_contact"], annonce["id"])
@@ -362,6 +364,8 @@ def commande_test(cfg: Config) -> None:
     imap.logout()
     gmail.tester_envoi(cfg.gmail_adresse, cfg.gmail_mot_de_passe)
     print("✅ Envoi Gmail possible (rien n'a été envoyé).")
+    if cfg.email_reponse:
+        print(f"✅ Les agences répondront à {cfg.email_reponse} (copie de chaque candidature envoyée).")
     try:
         telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, "✅ Test réussi : le bot fonctionne.")
         print("✅ Message Telegram envoyé : vérifiez votre téléphone.")
