@@ -441,7 +441,10 @@ def commande_analyser(cfg: Config) -> None:
                 ok, raison = extraction.est_eligible(a, cfg.prix_max, cfg.zones, cfg.prix_max_coloc)
                 print(f"  {'✅' if ok else '❌'} {'COLOC ' if a.colocation else ''}{a.prix_cc} € | "
                       f"{a.surface} m² | {a.ville} | {a.email_contact or a.telephone or '-'} | {raison}\n"
-                      f"     {a.lien[:100]}\n     photo : {(a.photo or '-')[:100]}")
+                      f"     {a.lien[:100]}\n     photos : {len(a.photos)}")
+                if a.ville is None or a.surface is None or a.prix_cc is None:
+                    # Extraction incomplète : on montre le texte lu, pour pouvoir corriger.
+                    print(f"     ⚠️ texte lu : {a.texte[:400]}")
     finally:
         imap.logout()
 
