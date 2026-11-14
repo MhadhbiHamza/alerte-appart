@@ -6,6 +6,7 @@ dans .env : le code n'a jamais besoin d'être modifié pour les changer.
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -38,12 +39,22 @@ class Config:
     nom_expediteur: str = ""
     revenu_net_mensuel: int = 0
     sources_toutes_zones: set = frozenset()
+    rouges: str = "soir"            # 🔴 : soir (résumé du soir) | direct | jamais
+    heure_resume_soir: Optional[int] = 21
+    heure_bilan_matin: Optional[int] = 8
+    imap_idle: bool = True
 
 
 def _chemin(valeur: str) -> Path:
     """Transforme un chemin relatif en chemin absolu (relatif au projet)."""
     p = Path(valeur).expanduser()
     return p if p.is_absolute() else DOSSIER_PROJET / p
+
+
+def _heure(valeur: str) -> Optional[int]:
+    """« 21 » -> 21 ; vide -> None (fonction désactivée)."""
+    valeur = (valeur or "").strip().lower().rstrip("h")
+    return int(valeur) if valeur.isdigit() and 0 <= int(valeur) <= 23 else None
 
 
 def _liste(valeur: str) -> list:
@@ -109,6 +120,10 @@ def charger_config() -> Config:
         revenu_net_mensuel=int(g("REVENU_NET_MENSUEL", "0") or 0),
         # Sites dont vous gardez TOUTES les annonces, quel que soit le lieu (ex. alerte « 30 min de… »)
         sources_toutes_zones={s.lower() for s in _liste(g("SOURCES_TOUTES_ZONES", "seloger,jinka"))},
+        rouges=g("ROUGES", "soir").strip().lower() or "soir",
+        heure_resume_soir=_heure(g("HEURE_RESUME_SOIR", "21")),
+        heure_bilan_matin=_heure(g("HEURE_BILAN_MATIN", "8")),
+        imap_idle=g("IMAP_IDLE", "1").strip() not in ("0", "non", "false", ""),
     )
 
 

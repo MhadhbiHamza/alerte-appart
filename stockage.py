@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS annonces (
     verdict             TEXT,                  -- 🟢 À saisir / 🟡 Correct / 🔴 Bof
     note                REAL,                  -- note globale sur 5
     essai               INTEGER DEFAULT 0,     -- 1 = annonce notifiée pour essayer (envois vers vous)
-    album_ids           TEXT                   -- numéros des messages photos (pour les supprimer)
+    album_ids           TEXT,                  -- numéros des messages photos (pour les supprimer)
+    differee            INTEGER DEFAULT 0      -- 1 = 🔴 mise de côté pour le résumé du soir
 );
 CREATE TABLE IF NOT EXISTS etat (              -- petites valeurs à retenir entre deux lancements
     cle    TEXT PRIMARY KEY,
@@ -62,10 +63,10 @@ NOUVELLES_COLONNES = {
     "ville": "TEXT", "quartier": "TEXT", "colocation": "INTEGER DEFAULT 0", "photo": "TEXT",
     "message_id": "INTEGER", "statut": "TEXT", "candidature": "TEXT", "envoye_le": "TEXT",
     "texte": "TEXT", "photos": "TEXT", "verdict": "TEXT", "note": "REAL", "essai": "INTEGER DEFAULT 0",
-    "album_ids": "TEXT",
+    "album_ids": "TEXT", "differee": "INTEGER DEFAULT 0",
 }
 CHAMPS_MODIFIABLES = {"notifiee_le", "message_id", "statut", "candidature", "envoye_le", "brouillon", "verdict", "note",
-                      "album_ids", "email_contact"}
+                      "album_ids", "email_contact", "differee"}
 
 
 def maintenant() -> str:
@@ -120,6 +121,39 @@ class Stockage:
         return self.db.execute(
             "SELECT * FROM annonces WHERE retenue=1 AND notifiee_le IS NULL ORDER BY id"
         ).fetchall()
+
+    # ---- chiffres pour /stats, le bilan du matin et le résumé du soir ----
+    def compter(self, depuis: str = "") -> dict:
+        """Compteurs depuis une date ISO (vide = depuis toujours)."""
+        q = lambda sql: self.db.execute(sql, (depuis,)).fetchone()[0]  # noqa: E731
+        return {
+            "vues": q("SELECT COUNT(*) FROM annonces WHERE vue_le >= ?"),
+            "gardees": q("SELECT COUNT(*) FROM annonces WHERE retenue=1 AND essai=0 AND vue_le >= ?"),
+            "vertes": q("SELECT COUNT(*) FROM annonces WHERE verdict LIKE '🟢%' AND essai=0 AND notifiee_le >= ?"),
+            "jaunes": q("SELECT COUNT(*) FROM annonces WHERE verdict LIKE '🟡%' AND essai=0 AND notifiee_le >= ?"),
+            "rouges": q("SELECT COUNT(*) FROM annonces WHERE verdict LIKE '🔴%' AND essai=0 AND notifiee_le >= ?"),
+            "envoyes": q("SELECT COUNT(*) FROM annonces WHERE envoye_le IS NOT NULL AND essai=0 AND envoye_le >= ?"),
+            "postules": q("SELECT COUNT(*) FROM annonces WHERE statut='postulé' AND essai=0 AND notifiee_le >= ?"),
+            "emails": self.db.execute("SELECT COUNT(*) FROM emails_traites WHERE traite_le >= ?",
+                                      (depuis,)).fetchone()[0],
+        }
+
+    def differees(self, depuis: str) -> List[sqlite3.Row]:
+        """🔴 mises de côté depuis une date, pas encore affichées."""
+        return self.db.execute("SELECT * FROM annonces WHERE differee=1 AND notifiee_le >= ? AND statut IS NULL "
+                               "ORDER BY note DESC, id", (depuis,)).fetchall()
+
+    def sans_decision(self, avant: str) -> List[sqlite3.Row]:
+        """Annonces affichées avant une date, sans aucune décision."""
+        return self.db.execute(
+            "SELECT * FROM annonces WHERE retenue=1 AND differee=0 AND essai=0 AND notifiee_le IS NOT NULL "
+            "AND notifiee_le < ? AND statut IS NULL AND envoye_le IS NULL ORDER BY id", (avant,)).fetchall()
+
+    def en_cours(self) -> List[sqlite3.Row]:
+        """Candidatures en cours : dossier envoyé, postulé ou brouillon (hors essais)."""
+        return self.db.execute(
+            "SELECT * FROM annonces WHERE essai=0 AND statut IN ('dossier envoyé', 'postulé', 'brouillon créé') "
+            "ORDER BY COALESCE(envoye_le, notifiee_le) DESC").fetchall()
 
     def passer_en_essai(self, nombre: int) -> List[int]:
         """Reprend les `nombre` dernières annonces écartées pour les notifier en mode essai."""
@@ -176,7 +210,7 @@ class Stockage:
         limite = (datetime.now() - timedelta(hours=heures)).isoformat(timespec="seconds")
         return self.db.execute(
             "SELECT * FROM annonces WHERE retenue=1 AND notifiee_le IS NOT NULL AND notifiee_le <= ? "
-            "AND relance_envoyee=0 AND essai=0 ORDER BY id",
+            "AND relance_envoyee=0 AND essai=0 AND differee=0 ORDER BY id",
             (limite,),
         ).fetchall()
 

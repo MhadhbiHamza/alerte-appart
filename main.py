@@ -19,22 +19,23 @@ Garanties :
     et jamais deux fois pour la même annonce.
 """
 import argparse
-import hashlib
 import imaplib
-import json
 import logging
 import socket
+import threading
 import time
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
 
-import analyse
 import extraction
 import gmail
+import bot
 import modele
+import resumes
 import suivi
 import telegram
-from config import Config, charger_config, verifier
-from stockage import Stockage, maintenant
+from config import DOSSIER_PROJET, Config, charger_config, verifier
+from stockage import Stockage
 
 log = logging.getLogger("alerte-appart")
 
@@ -81,325 +82,12 @@ def traiter_nouveaux_emails(cfg: Config, db: Stockage, imap) -> None:
         db.marquer_email_traite(cle)
 
 
-# --------------------------------------------------------------------------
-# Étapes 4-5 : message de candidature et notification Telegram avec boutons
-# --------------------------------------------------------------------------
-
-def preparer_candidature(cfg: Config, annonce):
-    """Renvoie (objet, message) remplis à partir de templates.md."""
-    valeurs = modele.valeurs_annonce(annonce)
-    valeurs["mon_email"] = cfg.email_reponse or cfg.gmail_adresse  # pour votre signature
-    objet, message = modele.charger(cfg.fichier_modele, colocation=bool(annonce["colocation"]))
-    objet = ("[ESSAI] " if annonce["essai"] else "") + modele.remplir(objet, valeurs)
-    return objet, modele.remplir(message, valeurs)
-
-
-def destinataire(cfg: Config, annonce) -> str:
-    """À qui envoyer la candidature : l'annonceur, ou VOUS-MÊME pour une annonce d'essai."""
-    if annonce["essai"]:
-        return cfg.email_reponse or cfg.gmail_adresse
-    return annonce["email_contact"] or ""
-
-
-def jeton(annonce) -> str:
-    """Signature propre à une annonce, ajoutée à ses boutons.
-
-    Si annonces.db est supprimée, les numéros repartent de 1 : sans cette signature, un bouton
-    d'un ANCIEN message pourrait agir sur une NOUVELLE annonce portant le même numéro.
-    """
-    return hashlib.sha1(f"{annonce['empreinte']}|{annonce['vue_le']}".encode()).hexdigest()[:8]
-
-
-def donnee_bouton(annonce, action: str) -> str:
-    return f"{action}:{annonce['id']}:{jeton(annonce)}"
-
-
-def boutons_annonce(annonce) -> telegram.Boutons:
-    d = lambda action: donnee_bouton(annonce, action)  # noqa: E731
-    if annonce["email_contact"] or annonce["essai"]:
-        return [[("✅ Postuler (envoyer le dossier)", d("postuler"))],
-                [("📝 Brouillon Gmail", d("brouillon")), ("❌ Pas intéressé", d("refuser"))]]
-    # Pas d'email dans l'alerte : « Postuler » vous demandera l'email de l'agence.
-    return [[("✅ Postuler (envoyer le dossier)", d("postuler"))],
-            [("🌐 Déjà postulé sur le site", d("site")), ("❌ Pas intéressé", d("refuser"))]]
-
-
-def analyser(cfg: Config, db: Stockage, annonce) -> analyse.Analyse:
-    return analyse.analyser(
-        annonce, db.prix_m2_zone(annonce["ville"], bool(annonce["colocation"]), annonce["id"]),
-        prioritaire=annonce["ville"] in cfg.priorites, revenu_net=cfg.revenu_net_mensuel or None,
-        prix_max=cfg.prix_max_coloc if annonce["colocation"] else cfg.prix_max,
-        trajet_ok=(annonce["source"] or "").lower() in cfg.sources_toutes_zones)
-
-
-def message_telegram(cfg: Config, annonce, message: str, resume: analyse.Analyse) -> str:
-    """Résumé « en un coup d'œil » + message de candidature prêt à copier."""
-    e = telegram.echapper
-    v = modele.valeurs_annonce(annonce)
-    lignes = []
-    if annonce["essai"]:
-        lignes.append(f"🧪 <b>ESSAI</b> — cette annonce ne correspond pas à vos critères. « Postuler » et "
-                      f"« Brouillon » envoient à <b>{e(destinataire(cfg, annonce))}</b>, jamais à l'annonceur.\n")
-    if annonce["ville"] in cfg.priorites:
-        lignes.append("⭐ <b>ZONE PRIORITAIRE</b>")
-    type_ = "👥 Colocation" if annonce["colocation"] else "🏠 Location (logement entier)"
-    lignes += [
-        f"<b>{resume.verdict} · {resume.note_globale:g}/5</b> — {type_} · {e(v['source'])}".replace(".", ","),
-        f"📍 <b>{e(v['ville'])}</b> · {e(v['surface'])} m² · <b>{e(v['prix'])} € CC</b>",
-    ]
-    if v["quartier"]:
-        lignes.append(f"📌 Quartier : {e(v['quartier'])}")
-    # Notes sur 5, une par ligne
-    for critere, note in resume.notes.items():
-        precision = f" <i>({resume.repere_prix})</i>" if critere == "Prix" and resume.repere_prix else ""
-        lignes.append(f"<code>{critere:<12}</code>{analyse.etoiles(note)} {note}/5{precision}" if note
-                      else f"<code>{critere:<12}</code>– (pas assez de données)")
-    lignes.append("")
-    lignes += [e(l) for l in resume.lignes]
-    if resume.pour:
-        lignes.append("✅ <b>Pour</b> : " + e(", ".join(resume.pour)))
-    if resume.contre:
-        lignes.append("⚠️ <b>Contre</b> : " + e(", ".join(resume.contre)))
-    lignes.append(f'🔗 <a href="{e(annonce["lien"], True)}">Voir l\'annonce</a> '
-                  "(toutes les photos et la description)")
-    if annonce["email_contact"]:
-        lignes.append(f"✉️ {e(annonce['email_contact'])}")
-    if annonce["telephone"]:
-        lignes.append(f"📞 {e(annonce['telephone'])}")
-    if annonce["email_contact"] or annonce["essai"]:
-        if cfg.dossier_pdf.is_file():
-            lignes.append("\n<i>« Postuler » envoie tout de suite le message ci-dessous et votre dossier PDF "
-                          f"à {e(destinataire(cfg, annonce))}.</i>")
-        else:
-            lignes.append(f"\n⚠️ Dossier PDF introuvable ({e(cfg.dossier_pdf.name)}) : « Postuler » "
-                          "n'enverra rien tant qu'il manque.")
-    else:
-        lignes.append("\n<i>Pas d'email dans l'alerte : « Postuler » vous demandera l'email de l'agence "
-                      "(visible sur l'annonce), puis enverra votre dossier. Ou copiez le message dans le "
-                      "formulaire du site.</i>")
-    entete = "\n".join(lignes) + "\n\n<b>Message prêt à copier</b> (appuyez dessus pour le copier) :\n"
-
-    # On coupe le message si besoin pour respecter la limite de Telegram.
-    place = telegram.LIMITE - len(entete) - 30
-    corps = e(message)
-    if len(corps) > place:
-        corps = corps[:place] + "…"
-    return entete + f"<pre>{corps}</pre>"
-
-
-def photos_annonce(annonce) -> list:
-    try:
-        photos = json.loads(annonce["photos"] or "[]")
-    except ValueError:
-        photos = []
-    return photos or ([annonce["photo"]] if annonce["photo"] else [])
-
-
-def notifier_annonces(cfg: Config, db: Stockage) -> None:
-    for annonce in db.a_notifier():
-        _, message = preparer_candidature(cfg, annonce)
-        resume = analyser(cfg, db, annonce)
-
-        # 1. Les photos de l'email, en album (si Telegram n'arrive pas à les lire, on continue).
-        photos, album_ok, album_ids = photos_annonce(annonce), False, []
-        if photos:
-            try:
-                album_ids = telegram.envoyer_photos(
-                    cfg.telegram_token, cfg.telegram_chat_id, photos,
-                    f"{resume.verdict} {resume.note_globale:g}/5 · {annonce['ville']} · {annonce['prix_cc']} € CC")
-                album_ok = True
-            except RuntimeError as exc:
-                log.warning("Photos non affichables par Telegram (%s)", exc)
-
-        # 2. Le résumé + les boutons. Sans album, Telegram affiche l'aperçu de la page de l'annonce.
-        message_id = telegram.envoyer(
-            cfg.telegram_token, cfg.telegram_chat_id, message_telegram(cfg, annonce, message, resume),
-            boutons=boutons_annonce(annonce),
-            apercu=None if album_ok else annonce["lien"],
-        )
-        db.maj(annonce["id"], notifiee_le=maintenant(), message_id=message_id, verdict=resume.verdict,
-               note=resume.note_globale, album_ids=json.dumps(album_ids))
-        log.info("Notification envoyée pour l'annonce #%d (%s)", annonce["id"], resume.verdict)
-
-
-# --------------------------------------------------------------------------
-# Étape 6 : vos réponses avec les boutons Telegram
-# --------------------------------------------------------------------------
-
-def traiter_boutons(cfg: Config, db: Stockage, attente: int) -> None:
-    """Attend (au plus `attente` s) vos appuis sur les boutons / vos réponses, et les applique."""
-    offset = int(db.lire_etat("telegram_offset", "0"))
-    for maj in telegram.mises_a_jour(cfg.telegram_token, offset, attente):
-        # On note d'abord la position : un appui n'est jamais traité deux fois.
-        db.ecrire_etat("telegram_offset", maj["update_id"] + 1)
-        clic, message = maj.get("callback_query"), maj.get("message")
-        try:
-            if clic:
-                traiter_clic(cfg, db, clic)
-            elif message:
-                traiter_message(cfg, db, message)
-        except Exception as exc:
-            log.exception("Erreur en traitant un bouton ou un message Telegram")
-            if clic:
-                telegram.repondre_clic(cfg.telegram_token, clic["id"], f"⚠️ Erreur : {exc}"[:200], alerte=True)
-            else:
-                telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id,
-                                 telegram.echapper(f"⚠️ Erreur : {exc}"[:500]))
-
-
-def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
-    token = cfg.telegram_token
-    chat = str(clic.get("message", {}).get("chat", {}).get("id"))
-    if chat != str(cfg.telegram_chat_id):  # sécurité : seuls VOS appuis comptent
-        telegram.repondre_clic(token, clic["id"], "Non autorisé.")
-        return
-    action, id_texte, signature = (clic.get("data", "").split(":") + ["", ""])[:3]
-    if action == "rien" or not id_texte.isdigit():
-        telegram.repondre_clic(token, clic["id"])
-        return
-    annonce = db.annonce(int(id_texte))
-    if annonce is None or signature != jeton(annonce):
-        telegram.repondre_clic(token, clic["id"], "Bouton périmé (ancien message) : rien n'a été fait. "
-                               "Utilisez la notification la plus récente.", alerte=True)
-        return
-    if annonce["envoye_le"]:  # protection contre le double envoi
-        telegram.repondre_clic(token, clic["id"], f"Dossier déjà envoyé le {_date(annonce['envoye_le'])}.")
-        return
-    message_clique = clic.get("message", {}).get("message_id")
-
-    if action == "refuser":
-        _enregistrer(cfg, db, annonce, "pas intéressé", "")
-        supprimees = _supprimer_messages(cfg, annonce, message_clique)
-        if not supprimees:  # trop ancien pour être supprimé (> 48 h) : on remplace les boutons
-            _remplacer_boutons(cfg, [message_clique], "❌ Pas intéressé")
-        telegram.repondre_clic(token, clic["id"], "Annonce supprimée." if supprimees else "Annonce classée.")
-
-    elif action == "site":
-        _enregistrer(cfg, db, annonce, "postulé", "sur le site")
-        _remplacer_boutons(cfg, [message_clique], "🌐 Postulé sur le site")
-        telegram.repondre_clic(token, clic["id"], "Noté : candidature faite sur le site.")
-
-    elif action == "brouillon":
-        if not destinataire(cfg, annonce):
-            telegram.repondre_clic(token, clic["id"], "Pas d'email pour cette annonce.")
-            return
-        objet, message = preparer_candidature(cfg, annonce)
-        pdf = cfg.dossier_pdf if cfg.dossier_pdf.is_file() else None
-        imap = gmail.connexion(cfg.gmail_adresse, cfg.gmail_mot_de_passe)
-        try:
-            gmail.creer_brouillon(imap, cfg.gmail_adresse, destinataire(cfg, annonce), objet, message, pdf,
-                                  cfg.email_reponse, cfg.nom_expediteur)
-        finally:
-            imap.logout()
-        _enregistrer(cfg, db, annonce, "brouillon créé", "brouillon Gmail")
-        _remplacer_boutons(cfg, [message_clique], "📝 Brouillon créé dans Gmail")
-        telegram.repondre_clic(token, clic["id"], "Brouillon créé : relisez-le dans Gmail puis envoyez-le.")
-
-    elif action == "postuler" and destinataire(cfg, annonce):
-        ok, reponse = envoyer_dossier(cfg, db, annonce, [message_clique])
-        telegram.repondre_clic(token, clic["id"], reponse, alerte=not ok)
-
-    elif action == "postuler":
-        # Pas d'email dans l'alerte : on vous le demande. Votre réponse déclenche l'envoi.
-        demande = telegram.demander_reponse(
-            token, cfg.telegram_chat_id,
-            f"✉️ <b>Email de l'agence ?</b>\n{telegram.echapper(annonce['ville'] or '')} · "
-            f"{annonce['prix_cc']} € CC\nRépondez à ce message avec l'email de l'annonceur "
-            "(visible sur l'annonce) : votre dossier partira aussitôt.",
-            "agence@exemple.fr")
-        db.ecrire_etat(f"demande_email:{demande}", annonce["id"])
-        db.ecrire_etat("derniere_demande_email", f"{annonce['id']}:{demande}:{time.time():.0f}")
-        telegram.repondre_clic(token, clic["id"], "Répondez avec l'email de l'agence.")
-
-
-def traiter_message(cfg: Config, db: Stockage, message: dict) -> None:
-    """Votre réponse à « Email de l'agence ? » : on enregistre l'adresse et on envoie le dossier."""
-    if str(message.get("chat", {}).get("id")) != str(cfg.telegram_chat_id):
-        return  # message d'un inconnu : ignoré
-    repond_a = (message.get("reply_to_message") or {}).get("message_id")
-    id_texte = db.lire_etat(f"demande_email:{repond_a}") if repond_a else ""
-    if not id_texte:
-        # Réponse tapée sans « répondre » : on prend la dernière demande, si elle date de moins de 2 h.
-        derniere = db.lire_etat("derniere_demande_email").split(":")
-        if len(derniere) == 3 and time.time() - float(derniere[2]) < 7200:
-            id_texte, repond_a = derniere[0], int(derniere[1])
-    if not id_texte:
-        return  # message sans rapport avec une candidature
-    adresse = extraction.EMAIL_RE.search(message.get("text") or "")
-    if not adresse:
-        telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id,
-                         "Je n'ai pas trouvé d'adresse email dans votre réponse. Répondez avec l'email "
-                         "de l'agence, par exemple agence@exemple.fr.")
-        return
-    annonce = db.annonce(int(id_texte))
-    if annonce is None:
-        return
-    if annonce["envoye_le"]:
-        telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id,
-                         f"Dossier déjà envoyé le {_date(annonce['envoye_le'])} pour cette annonce.")
-        return
-    db.maj(annonce["id"], email_contact=adresse.group(0).lower())
-    _, reponse = envoyer_dossier(cfg, db, db.annonce(annonce["id"]), [annonce["message_id"]])
-    db.ecrire_etat(f"demande_email:{repond_a}", "")
-    db.ecrire_etat("derniere_demande_email", "")
-    telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, telegram.echapper(reponse))
-
-
-def envoyer_dossier(cfg: Config, db: Stockage, annonce, messages: list):
-    """Envoie la candidature + le PDF. Renvoie (réussi ?, texte de confirmation)."""
-    if not cfg.dossier_pdf.is_file():
-        return False, f"⚠️ Dossier PDF introuvable ({cfg.dossier_pdf.name}) : rien n'a été envoyé."
-    objet, message = preparer_candidature(cfg, annonce)
-    a_qui = destinataire(cfg, annonce)
-    gmail.envoyer_email(cfg.gmail_adresse, cfg.gmail_mot_de_passe, a_qui,
-                        objet, message, cfg.dossier_pdf, cfg.email_reponse, cfg.nom_expediteur)
-    quand = maintenant()
-    db.maj(annonce["id"], envoye_le=quand)
-    essai = " (essai)" if annonce["essai"] else ""
-    log.info("📨 Dossier envoyé à %s (annonce #%d%s)", a_qui, annonce["id"], essai)
-    _enregistrer(cfg, db, annonce, "dossier envoyé" + essai, f"email envoyé le {_date(quand)} à {a_qui}")
-    _remplacer_boutons(cfg, messages, f"✅ Dossier envoyé le {_date(quand)}{essai}")
-    return True, f"Dossier envoyé à {a_qui} ✅{essai}"
-
-
-def _enregistrer(cfg: Config, db: Stockage, annonce, statut: str, candidature: str) -> None:
-    """Enregistre la décision dans la base et dans suivi.csv."""
-    db.maj(annonce["id"], statut=statut, candidature=candidature)
-    if annonce["csv_ecrit"]:
-        try:
-            suivi.maj(cfg.fichier_csv, annonce["id"], statut=statut, candidature=candidature)
-        except PermissionError:
-            log.warning("suivi.csv est verrouillé (ouvert dans Excel ?) : statut non mis à jour dans le CSV")
-
-
-def _remplacer_boutons(cfg: Config, messages: list, texte_bouton: str) -> None:
-    for message_id in dict.fromkeys(m for m in messages if m):
-        try:
-            telegram.modifier_boutons(cfg.telegram_token, cfg.telegram_chat_id, message_id,
-                                      [[(texte_bouton, "rien")]])
-        except RuntimeError as exc:  # message supprimé entre-temps, etc.
-            log.warning("Boutons non modifiés (%s)", exc)
-
-
-def _supprimer_messages(cfg: Config, annonce, message_clique) -> bool:
-    """Supprime de Telegram le résumé, l'album photos et le message cliqué. True si réussi."""
-    try:
-        album = json.loads(annonce["album_ids"] or "[]")
-    except ValueError:
-        album = []
-    a_supprimer = dict.fromkeys(m for m in [message_clique, annonce["message_id"], *album] if m)
-    reussi = False
-    for message_id in a_supprimer:
-        try:
-            telegram.supprimer_message(cfg.telegram_token, cfg.telegram_chat_id, message_id)
-            reussi = reussi or message_id == message_clique
-        except RuntimeError as exc:  # Telegram refuse au-delà de 48 h
-            log.warning("Message %s non supprimé (%s)", message_id, exc)
-    return reussi
-
-
-def _date(iso: str) -> str:
-    return datetime.fromisoformat(iso).strftime("%d/%m à %H:%M")
+# Cartes Telegram, boutons et réponses : voir bot.py
+from bot import (  # noqa: E402,F401  (réexportés pour les tests)
+    analyser, boutons_annonce, destinataire, donnee_bouton, envoyer_dossier, jeton, message_telegram,
+    notifier_annonces, photos_annonce, preparer_candidature, traiter_boutons, traiter_clic, traiter_message,
+    _date,
+)
 
 
 # --------------------------------------------------------------------------
@@ -422,7 +110,7 @@ def mettre_a_jour_csv(cfg: Config, db: Stockage) -> None:
             "lien": a["lien"],
             "contact": v["contact"],
             "candidature": a["candidature"] or "",
-            "statut": a["statut"] or "nouveau",
+            "statut": a["statut"] or ("mise de côté 🔴" if a["differee"] else "nouveau"),
             "relance_le": "",
         }
         try:
@@ -472,6 +160,8 @@ def envoyer_relances(cfg: Config, db: Stockage) -> None:
 # --------------------------------------------------------------------------
 
 def cycle(cfg: Config, db: Stockage) -> None:
+    if db.lire_etat("pause") == "1":  # /pause dans Telegram : on ne lit plus les alertes
+        return
     imap = gmail.connexion(cfg.gmail_adresse, cfg.gmail_mot_de_passe)
     try:
         traiter_nouveaux_emails(cfg, db, imap)
@@ -490,8 +180,27 @@ def boucle(cfg: Config, db: Stockage, une_fois: bool) -> None:
              cfg.prix_max, cfg.prix_max_coloc, len(cfg.zones), ", ".join(sorted(cfg.priorites)))
     prochain_cycle = 0.0
     reseau = EtatReseau()
+    nouvel_email, arret = threading.Event(), threading.Event()
+    if not une_fois:
+        try:  # menu des commandes dans Telegram (/pause, /stats…)
+            telegram.definir_commandes(cfg.telegram_token, bot.COMMANDES)
+        except Exception as exc:
+            log.debug("Menu des commandes non défini (%s)", exc)
+        if cfg.imap_idle:  # réaction dès qu'un email arrive, en plus de la lecture toutes les 2 min
+            threading.Thread(target=gmail.surveiller, daemon=True, name="imap-idle",
+                             args=(cfg.gmail_adresse, cfg.gmail_mot_de_passe, cfg.dossier_imap,
+                                   nouvel_email, arret)).start()
+    try:
+        _boucle(cfg, db, une_fois, prochain_cycle, reseau, nouvel_email)
+    finally:
+        arret.set()
+
+
+def _boucle(cfg: Config, db: Stockage, une_fois: bool, prochain_cycle: float, reseau: EtatReseau,
+            nouvel_email: threading.Event) -> None:
     while True:
-        if time.time() >= prochain_cycle:
+        if time.time() >= prochain_cycle or nouvel_email.is_set():
+            nouvel_email.clear()
             try:
                 cycle(cfg, db)
                 reseau.ok()
@@ -501,8 +210,16 @@ def boucle(cfg: Config, db: Stockage, une_fois: bool) -> None:
                 # Une coupure réseau ne doit pas arrêter l'outil : on réessaie au cycle suivant.
                 log.exception("Erreur pendant le cycle, nouvel essai dans %d s", cfg.intervalle_secondes)
             prochain_cycle = time.time() + cfg.intervalle_secondes
+        try:  # bilan du matin et résumé du soir, à l'heure prévue
+            resumes.envoyer_programmes(cfg, db)
+        except ERREURS_RESEAU as exc:
+            reseau.erreur(exc)
+        except Exception:
+            log.exception("Erreur en préparant un message programmé")
         # Entre deux lectures d'emails, on écoute les boutons Telegram (réaction en ~1 s).
-        attente = 0 if une_fois else int(min(25, max(1, prochain_cycle - time.time())))
+        # Avec la surveillance IMAP, on revient au moins toutes les 10 s voir si un email est arrivé.
+        maxi = 10 if cfg.imap_idle else 25
+        attente = 0 if une_fois else int(min(maxi, max(1, prochain_cycle - time.time())))
         try:
             traiter_boutons(cfg, db, attente)
             reseau.ok()
@@ -567,9 +284,38 @@ def commande_analyser(cfg: Config) -> None:
         imap.logout()
 
 
+PORT_VERROU = 47821  # port local réservé pour empêcher deux lancements en même temps
+
+
+def verrouiller_instance() -> socket.socket:
+    """Une seule instance à la fois : deux outils en parallèle se disputeraient Telegram."""
+    verrou = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        verrou.bind(("127.0.0.1", PORT_VERROU))
+    except OSError:
+        verrou.close()
+        raise SystemExit("⚠️  L'outil tourne déjà (dans une autre fenêtre ou au démarrage de Windows). "
+                         "Fermez-le d'abord, ou laissez-le tourner.")
+    return verrou
+
+
+def configurer_logs() -> None:
+    """Journal à l'écran + dans logs/alerte-appart.log (1 Mo × 3 fichiers, les plus anciens sont effacés)."""
+    format_ = logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%d/%m %H:%M:%S")
+    dossier = DOSSIER_PROJET / "logs"
+    dossier.mkdir(exist_ok=True)
+    fichier = RotatingFileHandler(dossier / "alerte-appart.log", maxBytes=1_000_000, backupCount=3,
+                                  encoding="utf-8")
+    ecran = logging.StreamHandler()
+    for h in (fichier, ecran):
+        h.setFormatter(format_)
+    racine = logging.getLogger()
+    racine.setLevel(logging.INFO)
+    racine.handlers = [ecran, fichier]
+
+
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
-                        datefmt="%d/%m %H:%M:%S")
+    configurer_logs()
     ap = argparse.ArgumentParser(description="Alertes appartement Paris -> Telegram")
     ap.add_argument("--une-fois", action="store_true", help="un seul passage puis arrêt")
     ap.add_argument("--test", action="store_true", help="tester Gmail + Telegram")
@@ -594,6 +340,7 @@ def main() -> None:
         return commande_analyser(cfg)
 
     verifier(cfg, "gmail_adresse", "gmail_mot_de_passe", "telegram_token", "telegram_chat_id")
+    verrou = verrouiller_instance()  # noqa: F841 (gardé ouvert tant que l'outil tourne)
     db = Stockage(cfg.fichier_db)
     if args.essai:
         ids = db.passer_en_essai(args.essai)

@@ -4,7 +4,10 @@ Les emails ci-dessous imitent la structure des alertes (plusieurs cartes
 d'annonces, en-tête rappelant les critères, pied de page de désinscription).
 """
 import sys
+import socket
 import tempfile
+import threading
+from datetime import datetime
 import unittest
 from email import policy
 from email.message import EmailMessage
@@ -166,7 +169,7 @@ class TestZones(unittest.TestCase):
 
     def test_alerte_trajet_emplacement(self):
         ligne = {"texte": "", "source": "Jinka", "prix_cc": 800, "surface": 25.0, "ville": "Colombes (92700)",
-                 "colocation": 0, "charges_incertaines": 0, "quartier": None}
+                 "colocation": 0, "charges_incertaines": 0, "quartier": None, "email_contact": None}
         self.assertEqual(analyse.analyser(ligne, [], trajet_ok=True).notes["Emplacement"], 3)
         self.assertEqual(analyse.analyser(ligne, []).notes["Emplacement"], 2)
 
@@ -244,6 +247,7 @@ class TestCycleComplet(unittest.TestCase):
                           ["jinka", "seloger", "pap"], self.pdf, 120, 48, 2,
                           Path(__file__).parent.parent / "templates.md", self.tmp / "suivi.csv",
                           self.tmp / "a.db", 600)
+        self.cfg.rouges = "direct"  # scénario historique : tout est envoyé ; « soir » testé à part
         self.db = Stockage(self.cfg.fichier_db)
         self.emails = [
             ("INBOX:1:1", email_de("Jinka <alerte@jinka.fr>", HTML_JINKA)),
@@ -268,6 +272,7 @@ class TestCycleComplet(unittest.TestCase):
             mock.patch.object(main.telegram, "envoyer_photos", return_value=[801, 802]),
             mock.patch.object(main.telegram, "supprimer_message"),
             mock.patch.object(main.telegram, "demander_reponse", return_value=950),
+            mock.patch.object(main.telegram, "modifier_texte"),
             mock.patch.object(main.telegram, "repondre_clic"),
             mock.patch.object(main.telegram, "modifier_boutons"),
         ]
@@ -340,6 +345,84 @@ class TestCycleComplet(unittest.TestCase):
         main.traiter_boutons(self.cfg, self.db, 0)
         self.m["envoyer_email"].assert_called_once()
 
+    def test_rouges_mises_de_cote_puis_resume_du_soir(self):
+        self.cfg.rouges = "soir"
+        self.cfg.heure_resume_soir = 21
+        # une annonce 🔴 garantie : DPE G
+        self.emails.append(("INBOX:1:9", email_de("PAP <alerte@pap.fr>",
+                            texte="Studio 20 m² - Paris 13e (75013) DPE G\n800 € CC\nhttps://www.pap.fr/annonces/rouge")))
+        main.boucle(self.cfg, self.db, une_fois=True)
+        rouge = next(r for r in self.db.db.execute("SELECT * FROM annonces WHERE lien LIKE '%rouge'"))
+        self.assertEqual((rouge["differee"], rouge["message_id"]), (1, None))
+        lignes = {l["id"]: l for l in main.suivi._lire(self.cfg.fichier_csv)}
+        self.assertEqual(lignes[str(rouge["id"])]["statut"], "mise de côté 🔴")
+        self.assertFalse(any("rouge" in str(c) for c in self.envoyes()))
+        # résumé du soir : listée avec un bouton « Voir »
+        soir = datetime.now().replace(hour=21, minute=5)
+        main.resumes.envoyer_programmes(self.cfg, self.db, soir)
+        texte, options = self.envoyes()[-1][0][2], self.envoyes()[-1][1]
+        self.assertIn("🌙", texte)
+        self.assertIn("Mises de côté", texte)
+        voir = options["boutons"][0][0][1]
+        self.assertEqual(voir, self.d("afficher", rouge["id"]))
+        # une seule fois par jour
+        nb = len(self.envoyes())
+        main.resumes.envoyer_programmes(self.cfg, self.db, soir.replace(minute=30))
+        self.assertEqual(len(self.envoyes()), nb)
+        # « Voir » envoie la carte (en silence) et l'annonce n'est plus mise de côté
+        self.clics = [clic(1, voir)]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.assertIn("Paris 13e", self.envoyes()[-1][0][2])
+        self.assertTrue(self.envoyes()[-1][1]["silencieux"])
+        self.assertEqual(self.db.annonce(rouge["id"])["differee"], 0)
+
+    def test_bilan_du_matin_et_fenetre_horaire(self):
+        self.cfg.heure_bilan_matin, self.cfg.heure_resume_soir = 8, None
+        main.resumes.envoyer_programmes(self.cfg, self.db, datetime.now().replace(hour=7, minute=59))
+        main.resumes.envoyer_programmes(self.cfg, self.db, datetime.now().replace(hour=11, minute=0))  # trop tard
+        self.assertEqual(len(self.envoyes()), 0)
+        main.resumes.envoyer_programmes(self.cfg, self.db, datetime.now().replace(hour=8, minute=1))
+        self.assertIn("Je tourne toujours", self.envoyes()[-1][0][2])
+
+    def test_annonce_suspecte_double_appui(self):
+        self.emails = [("INBOX:1:1", email_de("SeLoger <alertes@mail.seloger.com>", texte=(
+            "Paris 15e (75015) - 30 m²\n700 € CC\nPropriétaire à l'étranger, paiement Western Union. "
+            "Contact : proprio@arnaque.fr\nhttps://www.seloger.com/annonces/suspecte")))]
+        main.boucle(self.cfg, self.db, une_fois=True)
+        self.assertIn("🚩 <b>Arnaque possible</b>", self.envoyes()[0][0][2])
+        self.clics = [clic(1, self.d("postuler", 1))]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["envoyer_email"].assert_not_called()
+        self.assertIn("Annonce suspecte", self.m["repondre_clic"].call_args[0][2])
+        self.clics = [clic(2, self.d("postuler", 1))]   # 2e appui dans les 60 s : confirmé
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["envoyer_email"].assert_called_once()
+
+    def test_commandes(self):
+        main.boucle(self.cfg, self.db, une_fois=True)
+        commande = lambda n, texte, chat=42: {"update_id": n, "message": {  # noqa: E731
+            "message_id": 500 + n, "chat": {"id": chat}, "text": texte}}
+        self.clics = [commande(1, "/stats"), commande(2, "/suivi"), commande(3, "/pause", chat=666),
+                      commande(4, "/aide")]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        textes = [c[0][2] for c in self.envoyes()[-3:]]
+        self.assertIn("📊 <b>Statistiques</b>", textes[0])
+        self.assertIn("Annonces vues", textes[0])
+        self.assertIn("Aucune candidature en cours", textes[1])
+        self.assertIn("/pause", textes[2])
+        self.assertEqual(self.db.lire_etat("pause"), "")   # /pause d'un inconnu ignoré
+        # /pause : le cycle ne lit plus les emails ; /reprise : il reprend
+        self.clics = [commande(5, "/pause")]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.emails.append(("INBOX:1:8", email_de("PAP <alerte@pap.fr>",
+                            texte="Paris 14e (75014) - 25 m²\n700 € CC\nhttps://www.pap.fr/annonces/pause")))
+        main.cycle(self.cfg, self.db)
+        self.assertFalse(self.db.email_deja_traite("INBOX:1:8"))
+        self.clics = [commande(6, "/reprise")]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        main.cycle(self.cfg, self.db)
+        self.assertTrue(self.db.email_deja_traite("INBOX:1:8"))
+
     def test_bouton_perime(self):
         main.boucle(self.cfg, self.db, une_fois=True)
         # ancien format (sans signature) ou signature d'une autre annonce : rien n'est fait
@@ -357,42 +440,67 @@ class TestCycleComplet(unittest.TestCase):
         self.assertEqual(len(self.envoyes()), 4)
         textes = [c[0][2] for c in self.envoyes()]
         ivry, coloc = textes[2], textes[3]
-        self.assertIn("⭐", ivry)
+        # carte compacte : l'essentiel seulement
+        self.assertIn("⭐ <b>ZONE PRIORITAIRE</b>", ivry)
         self.assertIn("📍 <b>Ivry-sur-Seine</b> · 33 m² · <b>870 € CC</b>", ivry)
-        self.assertIn("cité : Mairie d'Ivry", ivry)
         self.assertIn("📌 Quartier : Mairie d'Ivry", ivry)
-        self.assertIn("à Ivry-sur-Seine, proposé à 870 €", ivry)
-        self.assertNotIn("⭐", textes[0])
+        self.assertIn("📍5 · ", ivry)
+        self.assertNotIn("M7 · RER C", ivry)    # le détail est derrière « 📊 Détails »
+        self.assertNotIn("<pre>", ivry)         # le message est derrière « 📋 Message »
+        self.assertLess(len(ivry), 900)
+        self.assertNotIn("ZONE PRIORITAIRE", textes[0])
         self.assertIn("👥 Colocation", coloc)
-        self.assertIn("chambre en colocation à Montrouge", coloc)
+        # 🟢 avec son, les autres en silence
+        for c in self.envoyes():
+            self.assertEqual(c[1]["silencieux"], "🟢" not in c[0][2])
         # aperçu = photo de l'email si présente, sinon le lien de l'annonce
         # photos de l'email -> album, puis résumé sans aperçu ; sans photo -> aperçu du lien
         self.m["envoyer_photos"].assert_called_once()
         self.assertEqual(self.m["envoyer_photos"].call_args[0][2], ["https://img.jinka.fr/photos/coloc1.jpg"])
         self.assertIsNone(self.envoyes()[3][1]["apercu"])
         self.assertEqual(self.envoyes()[0][1]["apercu"], "https://t.jinka.fr/c/abc111")
-        # résumé « en un coup d'œil »
-        self.assertIn("🏠 Location (logement entier)", textes[0])
+        self.assertIn("🏠 Location", textes[0])
         self.assertRegex(textes[0], r"<b>(🟢 À saisir|🟡 Correct|🔴 Bof) · \d(,\d)?/5</b>")
-        for critere in ("Emplacement", "Prix", "Logement", "Frais", "Transports"):
-            self.assertIn(f"<code>{critere:<12}</code>", textes[0])
-        self.assertIn("(vs votre budget)", textes[0])   # pas encore 5 annonces dans la zone
-        self.assertIn("Emplacement </code>★★★★★ 5/5", ivry)  # zone prioritaire
-        self.assertIn("€/m²", textes[0])
-        self.assertIn("🚇 M7 · RER C", ivry)
-        self.assertIn("0 € de frais d'agence", ivry)  # PAP = particulier
-        # boutons : Postuler partout ; Brouillon si email d'agence, sinon « Déjà postulé sur le site »
+        # boutons : Postuler · Détails/Message · Brouillon ou Déjà postulé + Pas intéressé · lien
         seloger = self.envoyes()[1][1]["boutons"]
-        self.assertEqual([d.rsplit(":", 1)[0] for ligne in seloger for _, d in ligne],
-                         ["postuler:4", "brouillon:4", "refuser:4"])
+        self.assertEqual([d.rsplit(":", 1)[0] if not d.startswith("http") else d
+                          for ligne in seloger for _, d in ligne],
+                         ["postuler:4", "details:4", "message:4", "brouillon:4", "refuser:4",
+                          "https://www.seloger.com/annonces/locations/appartement/paris-15eme-75/123.htm?utm_source=mail"])
         self.assertEqual(self.envoyes()[0][1]["boutons"][0][0][1], self.d("postuler", 1))
-        self.assertEqual(self.envoyes()[0][1]["boutons"][1][0][1], self.d("site", 1))
+        self.assertEqual(self.envoyes()[0][1]["boutons"][2][0][1], self.d("site", 1))
+
+        # « 📊 Détails » : la carte s'agrandit (notes en étoiles, €/m², transports, frais)
+        ivry_id = self.db.annonce(6)["message_id"]
+        self.clics = [clic(1, self.d("details", 6), message_id=ivry_id)]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        detail = self.m["modifier_texte"].call_args[0][3]
+        for critere in ("Emplacement", "Prix", "Logement", "Frais", "Transports"):
+            self.assertIn(f"<code>{critere:<12}</code>", detail)
+        self.assertIn("Emplacement </code>★★★★★ 5/5", detail)
+        self.assertIn("(vs votre budget)", detail)   # pas encore 5 annonces dans la zone
+        self.assertIn("€/m²", detail)
+        self.assertIn("🚇 M7 · RER C — cité : Mairie d'Ivry", detail)
+        self.assertIn("0 € de frais d'agence", detail)  # PAP = particulier
+        self.assertEqual(self.m["modifier_texte"].call_args[0][4][1][0][1], self.d("reduire", 6))
+        # « 🔼 Réduire » : retour à la carte compacte
+        self.clics = [clic(2, self.d("reduire", 6), message_id=ivry_id)]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.assertNotIn("M7 · RER C", self.m["modifier_texte"].call_args[0][3])
+        # « 📋 Message » : le message de candidature, à part, prêt à copier
+        nb = len(self.envoyes())
+        self.clics = [clic(3, self.d("message", 7))]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.assertEqual(len(self.envoyes()), nb + 1)
+        self.assertIn("<pre>", self.envoyes()[-1][0][2])
+        self.assertIn("chambre en colocation à Montrouge", self.envoyes()[-1][0][2])
+        self.clics = []
         self.m["envoyer_email"].assert_not_called()   # rien n'est envoyé sans appui
         self.m["creer_brouillon"].assert_not_called()
 
         # Appuis : Postuler (SeLoger) deux fois, Pas intéressé (Jinka), un intrus, J'ai postulé (Ivry)
-        self.clics = [clic(1, self.d("postuler", 4)), clic(2, self.d("postuler", 4)), clic(3, self.d("refuser", 1)),
-                      clic(4, self.d("site", 6), chat=666), clic(5, self.d("site", 6))]
+        self.clics = [clic(11, self.d("postuler", 4)), clic(12, self.d("postuler", 4)), clic(13, self.d("refuser", 1)),
+                      clic(14, self.d("site", 6), chat=666), clic(15, self.d("site", 6))]
         main.traiter_boutons(self.cfg, self.db, 0)
         self.m["envoyer_email"].assert_called_once()
         args = self.m["envoyer_email"].call_args[0]
@@ -418,15 +526,15 @@ class TestCycleComplet(unittest.TestCase):
         self.assertIn(lignes["7"]["verdict"], ("🟢 À saisir", "🟡 Correct", "🔴 Bof"))
         self.assertRegex(lignes["7"]["note"], r"^\d(,\d)?/5$")
 
-        # 2e passage : rien de nouveau
+        # 2e passage : rien de nouveau (4 cartes + le message demandé avec « 📋 Message »)
         main.boucle(self.cfg, self.db, une_fois=True)
-        self.assertEqual(len(self.envoyes()), 4)
+        self.assertEqual(len(self.envoyes()), 5)
 
         # 48 h plus tard : rappels sauf pour « pas intéressé » ; boutons remis si pas de décision
         self.db.db.execute("UPDATE annonces SET notifiee_le='2000-01-01T00:00:00'")
         self.db.db.commit()
         main.boucle(self.cfg, self.db, une_fois=True)
-        rappels = self.envoyes()[4:]
+        rappels = self.envoyes()[5:]
         self.assertEqual(len(rappels), 3)
         self.assertIn("relancez l'agence", rappels[0][0][2])
         self.assertIsNone(rappels[0][1]["boutons"])
@@ -509,7 +617,7 @@ class TestReseau(unittest.TestCase):
 class TestAnalyse(unittest.TestCase):
     def ligne(self, **k):
         base = {"texte": "", "source": "SeLoger", "prix_cc": 900, "surface": 30.0, "ville": "Paris 13e",
-                "colocation": 0, "charges_incertaines": 0, "quartier": None}
+                "colocation": 0, "charges_incertaines": 0, "quartier": None, "email_contact": None}
         base.update(k)
         return base
 
@@ -550,12 +658,89 @@ class TestAnalyse(unittest.TestCase):
         self.assertTrue(any("plafond légal (~120 €)" in c for c in r.contre))
         self.assertTrue(any("minimum légal de 9 m²" in c for c in r.contre))
 
+    def test_arnaques(self):
+        propre = analyse.analyser(self.ligne(texte="Bel appartement lumineux"), [30.0] * 6)
+        self.assertEqual(propre.alertes_arnaque, [])
+        cas = {
+            "Paiement par Western Union uniquement": "Western Union",
+            "Contactez-moi sur WhatsApp": "WhatsApp",
+            "Je suis à l'étranger pour le travail": "propriétaire à l'étranger",
+            "Merci de verser la caution avant la visite": "argent demandé avant la visite",
+            "Les clés envoyées par la poste": "clés envoyées par la poste",
+        }
+        for texte, attendu in cas.items():
+            r = analyse.analyser(self.ligne(texte=texte), [30.0] * 6)
+            self.assertTrue(any(attendu in a for a in r.alertes_arnaque), texte)
+            self.assertEqual(r.verdict, "🔴 Bof", texte)
+        bas = analyse.analyser(self.ligne(prix_cc=500), [30.0] * 6)   # 16,7 €/m² vs 30 : -44 %
+        self.assertTrue(any("anormalement bas" in a for a in bas.alertes_arnaque))
+        jetable = analyse.analyser(self.ligne(email_contact="proprio@yopmail.com"), [])
+        self.assertIn("adresse email jetable", jetable.alertes_arnaque)
+
     def test_budget_et_revenus(self):
         r = analyse.analyser(self.ligne(texte="meublé, dont 50 € de charges", source="PAP"), [], revenu_net=2700)
         # 900 + dépôt 2 × 850 (meublé) + 0 € de frais (particulier)
         self.assertIn("💰 Entrée ≈ 2 600 €", "\n".join(r.lignes))
         self.assertIn("👛 33 % de vos revenus nets", r.lignes)
         self.assertEqual(r.notes["Frais"], 5)  # particulier
+
+
+class TestFiabilite(unittest.TestCase):
+    def test_une_seule_instance(self):
+        verrou = main.verrouiller_instance()
+        try:
+            with self.assertRaises(SystemExit):
+                main.verrouiller_instance()
+        finally:
+            verrou.close()
+        main.verrouiller_instance().close()   # libéré : on peut relancer
+
+    def _faux_imap(self, reponses: bytes):
+        serveur, client = socket.socketpair()
+        serveur.sendall(reponses)
+
+        class FauxImap:
+            sock = client
+            def _new_tag(self): return b"A001"
+            def send(self, data): self.envoye = getattr(self, "envoye", b"") + data
+        return FauxImap(), serveur
+
+    def test_idle_nouvel_email(self):
+        imap, serveur = self._faux_imap(b"+ idling\r\n* 3 EXISTS\r\nA001 OK IDLE terminated\r\n")
+        self.assertTrue(main.gmail.attendre_idle(imap, 60, threading.Event()))
+        self.assertIn(b"A001 IDLE", imap.envoye)
+        self.assertIn(b"DONE", imap.envoye)
+        serveur.close()
+
+    def test_idle_refuse(self):
+        imap, serveur = self._faux_imap(b"A001 BAD unknown command\r\n")
+        with self.assertRaises(main.gmail.IdleRefuse):
+            main.gmail.attendre_idle(imap, 60, threading.Event())
+        serveur.close()
+
+    def test_idle_arret_demande(self):
+        imap, serveur = self._faux_imap(b"+ idling\r\nA001 OK\r\n")
+        arret = threading.Event()
+        arret.set()
+        self.assertFalse(main.gmail.attendre_idle(imap, 60, arret))
+        serveur.close()
+
+    def test_email_arrive_declenche_un_cycle(self):
+        cfg = mock.Mock(intervalle_secondes=120, imap_idle=True)
+        evenement = threading.Event()
+        evenement.set()
+        with mock.patch.object(main, "cycle") as cycle, \
+             mock.patch.object(main, "traiter_boutons", side_effect=KeyboardInterrupt), \
+             mock.patch.object(main.resumes, "envoyer_programmes"):
+            with self.assertRaises(KeyboardInterrupt):
+                main._boucle(cfg, mock.Mock(), False, time_futur(), main.EtatReseau(), evenement)
+        cycle.assert_called_once()   # pas attendu les 2 minutes
+        self.assertFalse(evenement.is_set())
+
+
+def time_futur():
+    import time
+    return time.time() + 3600
 
 
 class TestGmail(unittest.TestCase):

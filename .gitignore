@@ -4,3 +4,4 @@ suivi.csv
 *.pdf
 __pycache__/
 .venv/
+logs/

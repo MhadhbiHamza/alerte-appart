@@ -6,7 +6,9 @@ de lui-même. L'email envoyé apparaît dans « Messages envoyés » de Gmail.
 """
 import email
 import imaplib
+import logging
 import re
+import select
 import smtplib
 import time
 from datetime import date, timedelta
@@ -18,6 +20,7 @@ from typing import Callable, Iterator, Optional, Tuple
 
 SERVEUR_IMAP = "imap.gmail.com"
 SERVEUR_SMTP = "smtp.gmail.com"
+log = logging.getLogger("alerte-appart")
 # Noms des mois en anglais imposés par IMAP (indépendant de la langue de l'ordinateur).
 MOIS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -150,3 +153,77 @@ def tester_envoi(adresse: str, mot_de_passe: str) -> None:
     """Vérifie que la connexion d'envoi fonctionne, sans rien envoyer."""
     with smtplib.SMTP_SSL(SERVEUR_SMTP, 465, timeout=30) as smtp:
         smtp.login(adresse, mot_de_passe)
+
+
+# --------------------------------------------------------------------------
+# Réaction instantanée : IMAP IDLE (Gmail prévient dès qu'un email arrive)
+# --------------------------------------------------------------------------
+
+class IdleRefuse(RuntimeError):
+    """Le serveur n'accepte pas IDLE : on reste sur la lecture toutes les 2 minutes."""
+
+
+def attendre_idle(imap, duree: float, arret) -> bool:
+    """Attend jusqu'à `duree` secondes un nouvel email avec la commande IDLE.
+
+    Renvoie True si un email est arrivé. Lit la connexion directement (sans le
+    tampon d'imaplib), pour pouvoir vérifier `arret` toutes les 5 secondes.
+    """
+    tag = imap._new_tag()
+    imap.send(tag + b" IDLE\r\n")
+    tampon, nouveau, accepte, done_envoye = b"", False, False, False
+    fin = time.time() + duree
+    while True:
+        if accepte and not done_envoye and (nouveau or arret.is_set() or time.time() >= fin):
+            imap.send(b"DONE\r\n")  # on sort d'IDLE ; le serveur répond « <tag> OK »
+            done_envoye = True
+        if b"\r\n" in tampon:
+            ligne, tampon = tampon.split(b"\r\n", 1)
+            if ligne.startswith(b"+"):
+                accepte = True
+            elif ligne.startswith(tag):
+                if not accepte:
+                    raise IdleRefuse(ligne.decode(errors="replace"))
+                return nouveau
+            elif b"EXISTS" in ligne.upper():
+                nouveau = True
+            continue
+        en_attente = getattr(imap.sock, "pending", lambda: 0)()
+        if not en_attente and not select.select([imap.sock], [], [], 5)[0]:
+            continue
+        morceau = imap.sock.recv(4096)
+        if not morceau:
+            raise ConnectionError("connexion IMAP fermée par le serveur")
+        tampon += morceau
+
+
+def surveiller(adresse: str, mot_de_passe: str, dossier: str, evenement, arret, duree: float = 25 * 60) -> None:
+    """Fil d'arrière-plan : déclenche `evenement` dès qu'un email arrive dans `dossier`.
+
+    Reconnexion toutes les 25 min (Gmail coupe IDLE vers 29 min) et après une erreur.
+    """
+    attente = 5
+    while not arret.is_set():
+        imap = None
+        try:
+            imap = connexion(adresse, mot_de_passe)
+            if "IDLE" not in getattr(imap, "capabilities", ("IDLE",)):
+                raise IdleRefuse("IDLE non proposé par le serveur")
+            imap.select(_guillemets(dossier), readonly=True)
+            attente = 5
+            while not arret.is_set():
+                if attendre_idle(imap, duree, arret):
+                    evenement.set()
+        except IdleRefuse as exc:
+            log.warning("Réaction instantanée indisponible (%s) : lecture toutes les 2 minutes.", exc)
+            return
+        except Exception as exc:  # coupure réseau, veille… : on réessaie un peu plus tard
+            log.debug("Surveillance IMAP interrompue (%s), reconnexion dans %d s", exc, attente)
+            arret.wait(attente)
+            attente = min(attente * 2, 300)
+        finally:
+            if imap is not None:
+                try:
+                    imap.logout()
+                except Exception:
+                    pass

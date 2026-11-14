@@ -18,10 +18,29 @@ Petit outil Python qui tourne sur votre ordinateur et, **toutes les 2 minutes** 
   sous une annonce, et jamais deux fois pour la même annonce. Les emails envoyés apparaissent dans
   « Messages envoyés » de la boîte dédiée.
 
+### Les notifications Telegram
+
+Chaque annonce arrive comme une **carte compacte** : verdict et note, lieu · surface · prix, notes
+`📍 emplacement · 💶 prix · 🏢 logement · 🧾 frais · 🚇 transports` (sur 5) et les 2-3 points clés.
+
+| Verdict | Comment il arrive |
+|---|---|
+| 🟢 À saisir | avec **son** |
+| 🟡 Correct | **en silence** (visible, mais ne vous dérange pas) |
+| 🔴 Bof | **mis de côté** : listé dans le résumé du soir avec un bouton « 👀 Voir » (`ROUGES=soir`, ou `direct` / `jamais`) |
+
+🚩 **Arnaques** : prix anormalement bas (≥ 30 % sous la médiane de la zone), paiement Western Union / coupons
+PCS, contact uniquement WhatsApp, propriétaire « à l'étranger », argent demandé avant la visite, clés envoyées
+par la poste, email jetable… L'annonce est signalée « 🚩 Arnaque possible » et passe en 🔴 ; « Postuler »
+demande alors **un 2e appui dans les 60 s** pour confirmer.
+
 ### Les boutons Telegram
 
 | Bouton | Ce qu'il fait |
 |---|---|
+| **📊 Détails** / **🔼 Réduire** | Affiche toute l'analyse (notes en étoiles, €/m², charges, frais, budget d'entrée, logement, transports), puis revient à la carte compacte. |
+| **📋 Message** | Envoie le message de candidature à part : appuyez dessus pour le copier. |
+| **🔗 Ouvrir l'annonce** | Ouvre directement la page de l'annonce. |
 | **✅ Postuler (envoyer le dossier)** | Envoie **immédiatement** le message de `templates.md` + `dossier.pdf` à l'email de l'annonce, depuis la boîte Gmail dédiée. Si `EMAIL_REPONSE` est rempli, cette adresse est **en copie (Cc)** et reçoit les réponses de l'agence ; `NOM_EXPEDITEUR` affiche votre nom comme expéditeur. Statut : `dossier envoyé`. Si le PDF est introuvable, rien n'est envoyé. |
 | **📝 Brouillon Gmail** | Crée le même email dans vos **Brouillons** Gmail, pour le relire ou le modifier avant de l'envoyer vous-même. Statut : `brouillon créé`. |
 | **✅ Postuler**, annonce **sans email** | Le bot vous demande l'email de l'agence (visible sur l'annonce) : répondez-lui en collant l'adresse, et le dossier part aussitôt. |
@@ -31,6 +50,28 @@ Petit outil Python qui tourne sur votre ordinateur et, **toutes les 2 minutes** 
 Après un appui, les boutons sont remplacés par la décision (ex. « ✅ Dossier envoyé le 14/11 à 10:32 »).
 Seuls les appuis venant de **votre** compte Telegram (`TELEGRAM_CHAT_ID`) sont pris en compte.
 Les boutons réagissent en quelques secondes tant que `python main.py` tourne.
+
+### Les commandes du bot
+
+Tapez-les dans la conversation avec votre bot (elles apparaissent aussi dans le menu « / ») :
+
+| Commande | Effet |
+|---|---|
+| `/pause` | Arrête la lecture des alertes (vacances, dossier en cours…). Les emails attendent. |
+| `/reprise` | Reprend la lecture, y compris les alertes reçues pendant la pause. |
+| `/stats` | Annonces vues, gardées, 🟢/🟡/🔴, dossiers envoyés : 7 derniers jours et au total. |
+| `/suivi` | Vos candidatures en cours (dossier envoyé, postulé, brouillon). |
+| `/aide` | Rappel des commandes et des boutons. |
+
+### Les messages programmés
+
+- **☀️ Bilan du matin** (`HEURE_BILAN_MATIN=8`) : « je tourne toujours » + les chiffres depuis la veille.
+  Si vous ne le recevez pas, c'est que l'outil s'est arrêté.
+- **🌙 Résumé du soir** (`HEURE_RESUME_SOIR=21`) : annonces du jour, 🔴 mises de côté (bouton « 👀 Voir »),
+  dossiers envoyés, annonces sans réponse depuis plus de 24 h.
+
+Une fois par jour chacun ; si le PC était éteint à l'heure prévue, le message part au rallumage
+(dans les 3 heures). Laissez la variable vide pour désactiver.
 
 **Photos.** Toutes les photos présentes dans l'email d'alerte sont envoyées en album juste avant le résumé
 (souvent 1 à 3 : les sites n'en mettent pas plus dans leurs emails). Sans photo, Telegram affiche l'aperçu de
@@ -257,9 +298,28 @@ Le fichier `.env` contient vos secrets : ne l'envoyez à personne et ne le publi
    envoient alors le dossier **à votre adresse** (`EMAIL_REPONSE`, sinon la boîte dédiée), jamais à
    l'annonceur, avec un objet commençant par « [ESSAI] ». Pas de rappel de relance pour ces annonces.
 
-> L'outil ne tourne que lorsque l'ordinateur est allumé et non en veille. Sur un portable,
-> désactivez la mise en veille automatique pendant vos recherches, ou lancez-le le matin.
-> Les emails arrivés pendant une coupure sont traités au redémarrage (jusqu'à `JOURS_HISTORIQUE` jours).
+> L'outil ne tourne que lorsque l'ordinateur est allumé et non en veille. Les emails arrivés pendant
+> une coupure sont traités au redémarrage (jusqu'à `JOURS_HISTORIQUE` jours).
+
+**Réaction immédiate.** Gmail prévient l'outil dès qu'une alerte arrive (IMAP IDLE) : la notification
+part en quelques secondes, sans attendre les 2 minutes (qui restent une sécurité). `IMAP_IDLE=0` pour désactiver.
+
+**Une seule fenêtre à la fois.** Si l'outil tourne déjà, un 2e lancement s'arrête avec un message
+(deux outils en parallèle enverraient tout en double).
+
+**Journal.** Tout ce qui s'affiche est aussi enregistré dans `logs/alerte-appart.log` (utile pour comprendre
+ce qui s'est passé pendant la nuit).
+
+### Démarrage automatique avec Windows
+
+1. Double-cliquez sur `demarrer.bat` pour vérifier qu'il lance bien l'outil (il active Anaconda tout seul).
+2. Pour qu'il démarre à chaque ouverture de session : appuyez sur **Windows + R**, tapez `shell:startup`
+   puis Entrée. Le dossier « Démarrage » s'ouvre. Faites un **clic droit sur `demarrer.bat` → Créer un
+   raccourci**, puis déplacez ce raccourci dans le dossier « Démarrage ».
+3. Empêchez la mise en veille sur secteur : **Paramètres → Système → Alimentation → Écran et veille →
+   Mettre en veille : Jamais**.
+4. Pour arrêter : fermez la fenêtre noire. Pour ne plus démarrer automatiquement : supprimez le raccourci
+   du dossier « Démarrage » (Windows + R → `shell:startup`).
 
 ---
 
@@ -331,7 +391,10 @@ Pour repartir de zéro, arrêtez l'outil et supprimez `annonces.db`.
 
 | Fichier | Rôle |
 |---|---|
-| `main.py` | programme principal : boucle toutes les 2 min et enchaîne les étapes |
+| `main.py` | programme principal : boucle, lecture des emails, suivi CSV, relances, ligne de commande |
+| `bot.py` | Telegram : cartes d'annonces, boutons, réponses, commandes /pause /stats… |
+| `resumes.py` | bilan du matin, résumé du soir, /stats et /suivi |
+| `demarrer.bat` | lancement sous Windows (double-clic ou démarrage automatique) |
 | `config.py` | lecture du fichier `.env` |
 | `gmail.py` | lecture des alertes (IMAP), brouillons, envoi des candidatures après « Postuler » (SMTP) |
 | `extraction.py` | découpage des emails en annonces, extraction prix/surface/contact, filtre |

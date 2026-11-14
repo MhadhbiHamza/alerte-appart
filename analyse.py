@@ -46,6 +46,22 @@ LOYERS_ENCADRES = {"Saint-Denis", "Montreuil"}  # + tout Paris
 FRAIS_AGENCE_MAX_M2 = 15
 SURFACE_MIN_DECENCE = 9  # m² : surface minimale d'un logement décent
 
+# Signaux classiques d'arnaque à la location (texte sans accents, minuscules).
+ARNAQUE_MOTS = {
+    r"western\s*union|moneygram": "paiement par Western Union / MoneyGram",
+    r"mandat\s*cash|transcash|coupons?\s+pcs|\bpcs\b|neosurf": "paiement par coupons ou mandat",
+    r"whats\s*app": "contact uniquement par WhatsApp",
+    r"(?:proprietaire|je\s+suis|nous\s+sommes)\s+(?:a|en)\s+l'?etranger|expatrie|mute\s+a\s+l'?etranger":
+        "propriétaire à l'étranger",
+    r"(?:payer|verser|envoyer|virer)\s+(?:la\s+caution|le\s+depot|un\s+acompte|l'argent)\s+avant\s+(?:la\s+)?visite"
+    r"|avant\s+(?:la\s+)?visite.{0,30}(?:caution|depot|acompte|virement)":
+        "argent demandé avant la visite",
+    r"(?:cles?|clefs?)\s+(?:envoyees?|par\s+(?:la\s+)?(?:poste|courrier|colis))": "clés envoyées par la poste",
+    r"airbnb\s+(?:se\s+charge|gere|garantit)|via\s+airbnb": "paiement « via Airbnb »",
+}
+DOMAINES_JETABLES = ("yopmail", "mailinator", "guerrillamail", "temp-mail", "tempmail", "10minutemail",
+                     "trashmail", "jetable", "sharklasers", "dispostable", "maildrop")
+
 _R = re.IGNORECASE
 
 
@@ -171,6 +187,7 @@ class Analyse:
     notes: dict = field(default_factory=dict)   # {"Emplacement": 4, "Prix": 3, …}
     note_globale: float = 0.0
     repere_prix: str = ""                        # « vs votre budget » si pas encore de comparaison
+    alertes_arnaque: List[str] = field(default_factory=list)  # signaux d'arnaque repérés
 
 
 def analyser(annonce, prix_m2_zone: List[float], prioritaire: bool = False,
@@ -185,7 +202,7 @@ def analyser(annonce, prix_m2_zone: List[float], prioritaire: bool = False,
     d = extraire_details(annonce["texte"] or "", annonce["source"] or "")
     prix, surface, ville = annonce["prix_cc"], annonce["surface"], annonce["ville"]
     coloc = bool(annonce["colocation"])
-    lignes, pour, contre = [], [], []
+    lignes, pour, contre, arnaque = [], [], [], []
     alerte_rouge = False  # problème grave : verdict 🔴 quelle que soit la note
 
     # --- Prix -----------------------------------------------------------------
@@ -199,6 +216,8 @@ def analyser(annonce, prix_m2_zone: List[float], prioritaire: bool = False,
             ligne += (f" · {abs(ecart)} % {'moins cher' if ecart < 0 else 'plus cher'} que la médiane "
                       f"({mediane:.0f} €/m², {len(prix_m2_zone)} annonces vues ici)")
             note_prix = 5 if ecart <= -15 else 4 if ecart <= -5 else 3 if ecart < 5 else 2 if ecart < 15 else 1
+            if ecart <= -30:
+                arnaque.append(f"prix anormalement bas ({abs(ecart)} % sous la médiane)")
             if ecart <= -5:
                 pour.append(f"prix {abs(ecart)} % sous la médiane de la zone")
             elif ecart >= 5:
@@ -313,6 +332,17 @@ def analyser(annonce, prix_m2_zone: List[float], prioritaire: bool = False,
         pour.append("zone prioritaire")
     note_transports = NOTE_TRANSPORTS.get(ville, 2) + (1 if d.transports_cites else 0)
 
+    # --- Arnaques -----------------------------------------------------------------
+    s_texte = zones.simplifier(annonce["texte"] or "")
+    for motif, raison in ARNAQUE_MOTS.items():
+        if re.search(motif, s_texte):
+            arnaque.append(raison)
+    email = (annonce["email_contact"] or "").lower()
+    if any(d in email.split("@")[-1] for d in DOMAINES_JETABLES):
+        arnaque.append("adresse email jetable")
+    if arnaque:
+        alerte_rouge = True
+
     # --- Notes et verdict ---------------------------------------------------------
     notes = {"Emplacement": _borner(note_emplacement), "Prix": note_prix and _borner(note_prix),
              "Logement": _borner(note_logement), "Frais": _borner(note_frais),
@@ -325,4 +355,4 @@ def analyser(annonce, prix_m2_zone: List[float], prioritaire: bool = False,
         verdict = "🟢 À saisir"
     else:
         verdict = "🟡 Correct"
-    return Analyse(verdict, lignes, pour, contre, prix_m2, notes, note_globale, repere_prix)
+    return Analyse(verdict, lignes, pour, contre, prix_m2, notes, note_globale, repere_prix, arnaque)

@@ -31,18 +31,26 @@ def _appel(token: str, methode: str, donnees: dict, timeout: int = 20):
     return r.json().get("result")
 
 
+def _bouton(texte: str, donnee: str) -> dict:
+    # Une donnée qui commence par http devient un bouton lien (ouvre la page directement).
+    if donnee.startswith("http"):
+        return {"text": texte, "url": donnee}
+    return {"text": texte, "callback_data": donnee}
+
+
 def _clavier(boutons: Boutons) -> dict:
-    return {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in ligne] for ligne in boutons]}
+    return {"inline_keyboard": [[_bouton(t, d) for t, d in ligne] for ligne in boutons]}
 
 
 def envoyer(token: str, chat_id: str, texte_html: str,
-            boutons: Optional[Boutons] = None, apercu: Optional[str] = None) -> int:
+            boutons: Optional[Boutons] = None, apercu: Optional[str] = None, silencieux: bool = False) -> int:
     """Envoie un message (HTML de Telegram : <b>, <a>, <pre>…) et renvoie son numéro.
 
     apercu : adresse d'une image (ou de l'annonce) affichée en grand au-dessus du texte.
     C'est Telegram qui génère l'aperçu : l'outil lui-même ne visite aucun site.
     """
-    donnees = {"chat_id": chat_id, "text": texte_html, "parse_mode": "HTML"}
+    donnees = {"chat_id": chat_id, "text": texte_html, "parse_mode": "HTML",
+               "disable_notification": silencieux}  # silencieux : arrive sans son
     if apercu:
         donnees["link_preview_options"] = {"url": apercu, "prefer_large_media": True, "show_above_text": True}
     else:
@@ -52,19 +60,22 @@ def envoyer(token: str, chat_id: str, texte_html: str,
     return _appel(token, "sendMessage", donnees)["message_id"]
 
 
-def envoyer_photos(token: str, chat_id: str, photos: List[str], legende: str = "") -> List[int]:
+def envoyer_photos(token: str, chat_id: str, photos: List[str], legende: str = "",
+                   silencieux: bool = False) -> List[int]:
     """Envoie les photos de l'annonce (1 photo, ou un album de 2 à 10 photos).
 
     Ce sont les adresses d'images présentes dans l'email d'alerte : c'est Telegram
     qui les télécharge et les affiche. Renvoie les numéros des messages (pour les supprimer).
     """
     if len(photos) == 1:
-        r = _appel(token, "sendPhoto", {"chat_id": chat_id, "photo": photos[0], "caption": legende[:1024]})
+        r = _appel(token, "sendPhoto", {"chat_id": chat_id, "photo": photos[0], "caption": legende[:1024],
+                                        "disable_notification": silencieux})
         return [r["message_id"]]
     if photos:
         album = [{"type": "photo", "media": url} for url in photos[:10]]
         album[0]["caption"] = legende[:1024]
-        return [m["message_id"] for m in _appel(token, "sendMediaGroup", {"chat_id": chat_id, "media": album})]
+        return [m["message_id"] for m in _appel(token, "sendMediaGroup", {
+            "chat_id": chat_id, "media": album, "disable_notification": silencieux})]
     return []
 
 
@@ -74,6 +85,18 @@ def demander_reponse(token: str, chat_id: str, texte_html: str, exemple: str = "
         "chat_id": chat_id, "text": texte_html, "parse_mode": "HTML",
         "reply_markup": {"force_reply": True, "input_field_placeholder": exemple[:64]},
     })["message_id"]
+
+
+def modifier_texte(token: str, chat_id: str, message_id: int, texte_html: str, boutons: Boutons) -> None:
+    """Remplace le texte d'un message (ex. carte compacte <-> détails), en gardant des boutons."""
+    _appel(token, "editMessageText", {
+        "chat_id": chat_id, "message_id": message_id, "text": texte_html, "parse_mode": "HTML",
+        "link_preview_options": {"is_disabled": True}, "reply_markup": _clavier(boutons)})
+
+
+def definir_commandes(token: str, commandes: List[Tuple[str, str]]) -> None:
+    """Affiche les commandes (/pause, /stats…) dans le menu du bot."""
+    _appel(token, "setMyCommands", {"commands": [{"command": c, "description": d} for c, d in commandes]})
 
 
 def supprimer_message(token: str, chat_id: str, message_id: int) -> None:
