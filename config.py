@@ -35,6 +35,7 @@ class Config:
     fichier_db: Path
     prix_max_coloc: int = 600
     email_reponse: str = ""
+    nom_expediteur: str = ""
 
 
 def _chemin(valeur: str) -> Path:
@@ -99,6 +100,7 @@ def charger_config() -> Config:
         fichier_db=_chemin(g("FICHIER_DB", "annonces.db")),
         prix_max_coloc=int(g("PRIX_MAX_COLOC", "600")),
         email_reponse=g("EMAIL_REPONSE", "").strip(),
+        nom_expediteur=g("NOM_EXPEDITEUR", "").strip(),
     )
 
 

@@ -359,12 +359,15 @@ class TestGmail(unittest.TestCase):
     def test_email_reponse(self):
         pdf = Path(tempfile.mkdtemp()) / "dossier.pdf"
         pdf.write_bytes(b"%PDF")
-        msg = main.gmail.construire_email("boite@gmail.com", "agence@x.fr", "Objet", "Corps", pdf, "perso@y.fr")
-        self.assertEqual((msg["From"], msg["To"], msg["Reply-To"], msg["Bcc"]),
-                         ("boite@gmail.com", "agence@x.fr", "perso@y.fr", "perso@y.fr"))
+        msg = main.gmail.construire_email("boite@gmail.com", "agence@x.fr", "Objet", "Corps", pdf,
+                                          "perso@y.fr", "Hamza Test")
+        self.assertEqual((msg["From"], msg["To"], msg["Cc"], msg["Reply-To"]),
+                         ("Hamza Test <boite@gmail.com>", "agence@x.fr", "perso@y.fr", "perso@y.fr"))
+        self.assertIsNone(msg["Bcc"])
         sans = main.gmail.construire_email("boite@gmail.com", "agence@x.fr", "Objet", "Corps", pdf)
         self.assertIsNone(sans["Reply-To"])
-        # smtplib retire la ligne Bcc avant l'envoi : l'agence ne voit pas la copie
+        self.assertIsNone(sans["Cc"])
+        self.assertEqual(sans["From"], "boite@gmail.com")
         envoye = []
 
         class FauxSMTP:
@@ -375,7 +378,7 @@ class TestGmail(unittest.TestCase):
             def send_message(self, m): envoye.append(m)
         with mock.patch.object(main.gmail.smtplib, "SMTP_SSL", FauxSMTP):
             main.gmail.envoyer_email("boite@gmail.com", "mdp", "agence@x.fr", "O", "C", pdf, "perso@y.fr")
-        self.assertEqual(envoye[0]["Reply-To"], "perso@y.fr")
+        self.assertEqual((envoye[0]["Cc"], envoye[0]["Reply-To"]), ("perso@y.fr", "perso@y.fr"))
 
     def test_critere(self):
         c = main.gmail.critere_recherche(["jinka", "seloger", "pap"], 0)

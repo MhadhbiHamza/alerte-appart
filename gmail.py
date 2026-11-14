@@ -12,7 +12,7 @@ import time
 from datetime import date, timedelta
 from email import policy
 from email.message import EmailMessage
-from email.utils import formatdate, make_msgid
+from email.utils import formataddr, formatdate, make_msgid
 from pathlib import Path
 from typing import Callable, Iterator, Optional, Tuple
 
@@ -93,19 +93,21 @@ def dossier_brouillons(imap: imaplib.IMAP4_SSL) -> str:
 
 
 def construire_email(expediteur: str, destinataire: str, objet: str, corps: str,
-                     piece_jointe: Optional[Path], email_reponse: str = "") -> EmailMessage:
+                     piece_jointe: Optional[Path], email_reponse: str = "",
+                     nom_expediteur: str = "") -> EmailMessage:
     """Prépare l'email de candidature, avec le dossier PDF en pièce jointe.
 
     email_reponse (votre adresse perso, facultatif) :
-      - « Répondre à » : les réponses de l'agence arrivent sur cette adresse ;
-      - copie cachée : vous y recevez aussi la candidature envoyée.
+      - en copie (Cc, visible par l'agence) : vous recevez aussi la candidature ;
+      - « Répondre à » : les réponses de l'agence arrivent sur cette adresse.
+    nom_expediteur (facultatif) : nom affiché à la place de l'adresse Gmail, ex. « Prénom Nom ».
     """
     msg = EmailMessage()
-    msg["From"] = expediteur
+    msg["From"] = formataddr((nom_expediteur, expediteur)) if nom_expediteur else expediteur
     msg["To"] = destinataire
     if email_reponse:
+        msg["Cc"] = email_reponse
         msg["Reply-To"] = email_reponse
-        msg["Bcc"] = email_reponse  # retiré automatiquement de l'email reçu par l'agence
     msg["Subject"] = objet
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid()
@@ -122,9 +124,11 @@ def construire_email(expediteur: str, destinataire: str, objet: str, corps: str,
 
 
 def creer_brouillon(imap: imaplib.IMAP4_SSL, expediteur: str, destinataire: str, objet: str,
-                    corps: str, piece_jointe: Optional[Path], email_reponse: str = "") -> None:
+                    corps: str, piece_jointe: Optional[Path], email_reponse: str = "",
+                    nom_expediteur: str = "") -> None:
     """Dépose un brouillon (avec le PDF en pièce jointe) dans Gmail. N'envoie rien."""
-    msg = construire_email(expediteur, destinataire, objet, corps, piece_jointe, email_reponse)
+    msg = construire_email(expediteur, destinataire, objet, corps, piece_jointe, email_reponse,
+                           nom_expediteur)
     dossier = _guillemets(dossier_brouillons(imap))
     typ, reponse = imap.append(dossier, "(\\Draft)", imaplib.Time2Internaldate(time.time()), msg.as_bytes())
     if typ != "OK":
@@ -132,9 +136,11 @@ def creer_brouillon(imap: imaplib.IMAP4_SSL, expediteur: str, destinataire: str,
 
 
 def envoyer_email(adresse: str, mot_de_passe: str, destinataire: str, objet: str,
-                  corps: str, piece_jointe: Path, email_reponse: str = "") -> None:
+                  corps: str, piece_jointe: Path, email_reponse: str = "",
+                  nom_expediteur: str = "") -> None:
     """Envoie la candidature (appelée uniquement après un appui sur « ✅ Postuler »)."""
-    msg = construire_email(adresse, destinataire, objet, corps, piece_jointe, email_reponse)
+    msg = construire_email(adresse, destinataire, objet, corps, piece_jointe, email_reponse,
+                           nom_expediteur)
     with smtplib.SMTP_SSL(SERVEUR_SMTP, 465, timeout=30) as smtp:
         smtp.login(adresse, mot_de_passe)
         smtp.send_message(msg)

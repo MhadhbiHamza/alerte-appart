@@ -22,7 +22,7 @@ Petit outil Python qui tourne sur votre ordinateur et, **toutes les 2 minutes** 
 
 | Bouton | Ce qu'il fait |
 |---|---|
-| **✅ Postuler (envoyer le dossier)** | Envoie **immédiatement** le message de `templates.md` + `dossier.pdf` à l'email de l'annonce, depuis la boîte Gmail dédiée. Si `EMAIL_REPONSE` est rempli, l'agence répond sur cette adresse et vous y recevez une copie. Statut : `dossier envoyé`. Si le PDF est introuvable, rien n'est envoyé. |
+| **✅ Postuler (envoyer le dossier)** | Envoie **immédiatement** le message de `templates.md` + `dossier.pdf` à l'email de l'annonce, depuis la boîte Gmail dédiée. Si `EMAIL_REPONSE` est rempli, cette adresse est **en copie (Cc)** et reçoit les réponses de l'agence ; `NOM_EXPEDITEUR` affiche votre nom comme expéditeur. Statut : `dossier envoyé`. Si le PDF est introuvable, rien n'est envoyé. |
 | **📝 Brouillon Gmail** | Crée le même email dans vos **Brouillons** Gmail, pour le relire ou le modifier avant de l'envoyer vous-même. Statut : `brouillon créé`. |
 | **✅ J'ai postulé sur le site** | (annonces sans email) Note que vous avez postulé via le site. Statut : `postulé`. |
 | **❌ Pas intéressé** | Classe l'annonce : plus de rappel de relance. Statut : `pas intéressé`. |

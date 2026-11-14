@@ -199,7 +199,7 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
         imap = gmail.connexion(cfg.gmail_adresse, cfg.gmail_mot_de_passe)
         try:
             gmail.creer_brouillon(imap, cfg.gmail_adresse, annonce["email_contact"], objet, message, pdf,
-                                  cfg.email_reponse)
+                                  cfg.email_reponse, cfg.nom_expediteur)
         finally:
             imap.logout()
         _decision(cfg, db, annonce, clic, "brouillon créé", "brouillon Gmail",
@@ -212,7 +212,7 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
             return
         objet, message = preparer_candidature(cfg, annonce)
         gmail.envoyer_email(cfg.gmail_adresse, cfg.gmail_mot_de_passe, annonce["email_contact"],
-                            objet, message, cfg.dossier_pdf, cfg.email_reponse)
+                            objet, message, cfg.dossier_pdf, cfg.email_reponse, cfg.nom_expediteur)
         quand = maintenant()
         db.maj(annonce["id"], envoye_le=quand)
         log.info("📨 Dossier envoyé à %s (annonce #%d)", annonce["email_contact"], annonce["id"])
@@ -365,7 +365,9 @@ def commande_test(cfg: Config) -> None:
     gmail.tester_envoi(cfg.gmail_adresse, cfg.gmail_mot_de_passe)
     print("✅ Envoi Gmail possible (rien n'a été envoyé).")
     if cfg.email_reponse:
-        print(f"✅ Les agences répondront à {cfg.email_reponse} (copie de chaque candidature envoyée).")
+        print(f"✅ {cfg.email_reponse} sera en copie (Cc) de chaque candidature, et recevra les réponses.")
+    print(f"✅ Expéditeur affiché : {cfg.nom_expediteur + ' <' + cfg.gmail_adresse + '>' if cfg.nom_expediteur else cfg.gmail_adresse}"
+          + ("" if cfg.nom_expediteur else "   (astuce : NOM_EXPEDITEUR=Prénom Nom dans .env)"))
     try:
         telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, "✅ Test réussi : le bot fonctionne.")
         print("✅ Message Telegram envoyé : vérifiez votre téléphone.")
