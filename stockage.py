@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS annonces (
     envoye_le           TEXT,                  -- date d'envoi du dossier (évite tout double envoi)
     texte               TEXT,                  -- texte de l'annonce dans l'email (pour l'analyse)
     photos              TEXT,                  -- liste JSON des photos de l'email
-    verdict             TEXT                   -- 🟢 À saisir / 🟡 Correct / 🔴 Bof
+    verdict             TEXT,                  -- 🟢 À saisir / 🟡 Correct / 🔴 Bof
+    note                REAL                   -- note globale sur 5
 );
 CREATE TABLE IF NOT EXISTS etat (              -- petites valeurs à retenir entre deux lancements
     cle    TEXT PRIMARY KEY,
@@ -58,9 +59,9 @@ CREATE INDEX IF NOT EXISTS idx_lien ON annonces(lien_normalise);
 NOUVELLES_COLONNES = {
     "ville": "TEXT", "quartier": "TEXT", "colocation": "INTEGER DEFAULT 0", "photo": "TEXT",
     "message_id": "INTEGER", "statut": "TEXT", "candidature": "TEXT", "envoye_le": "TEXT",
-    "texte": "TEXT", "photos": "TEXT", "verdict": "TEXT",
+    "texte": "TEXT", "photos": "TEXT", "verdict": "TEXT", "note": "REAL",
 }
-CHAMPS_MODIFIABLES = {"notifiee_le", "message_id", "statut", "candidature", "envoye_le", "brouillon", "verdict"}
+CHAMPS_MODIFIABLES = {"notifiee_le", "message_id", "statut", "candidature", "envoye_le", "brouillon", "verdict", "note"}
 
 
 def maintenant() -> str:

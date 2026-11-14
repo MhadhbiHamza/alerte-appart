@@ -16,7 +16,7 @@ import unicodedata
 from pathlib import Path
 from typing import Dict, List
 
-COLONNES = ["id", "date", "source", "verdict", "annonce", "lien", "contact", "candidature", "statut", "relance_le"]
+COLONNES = ["id", "date", "source", "verdict", "note", "annonce", "lien", "contact", "candidature", "statut", "relance_le"]
 STATUTS_TERMINES = {"refuse", "abandonne", "loue", "ignore", "dossier accepte", "pas interesse"}
 
 

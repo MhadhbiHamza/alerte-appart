@@ -279,7 +279,11 @@ class TestCycleComplet(unittest.TestCase):
         self.assertEqual(self.envoyes()[0][1]["apercu"], "https://t.jinka.fr/c/abc111")
         # résumé « en un coup d'œil »
         self.assertIn("🏠 Location (logement entier)", textes[0])
-        self.assertRegex(textes[0], r"<b>(🟢 À saisir|🟡 Correct|🔴 Bof)</b>")
+        self.assertRegex(textes[0], r"<b>(🟢 À saisir|🟡 Correct|🔴 Bof) · \d(,\d)?/5</b>")
+        for critere in ("Emplacement", "Prix", "Logement", "Frais", "Transports"):
+            self.assertIn(f"<code>{critere:<12}</code>", textes[0])
+        self.assertIn("(vs votre budget)", textes[0])   # pas encore 5 annonces dans la zone
+        self.assertIn("Emplacement </code>★★★★★ 5/5", ivry)  # zone prioritaire
         self.assertIn("€/m²", textes[0])
         self.assertIn("🚇 M7 · RER C", ivry)
         self.assertIn("0 € de frais d'agence", ivry)  # PAP = particulier
@@ -316,6 +320,7 @@ class TestCycleComplet(unittest.TestCase):
         self.assertTrue(lignes["6"]["annonce"].startswith("⭐ Ivry-sur-Seine"))
         self.assertTrue(lignes["7"]["annonce"].startswith("Coloc – Montrouge"))
         self.assertIn(lignes["7"]["verdict"], ("🟢 À saisir", "🟡 Correct", "🔴 Bof"))
+        self.assertRegex(lignes["7"]["note"], r"^\d(,\d)?/5$")
 
         # 2e passage : rien de nouveau
         main.boucle(self.cfg, self.db, une_fois=True)
@@ -377,7 +382,7 @@ class TestReseau(unittest.TestCase):
 class TestAnalyse(unittest.TestCase):
     def ligne(self, **k):
         base = {"texte": "", "source": "SeLoger", "prix_cc": 900, "surface": 30.0, "ville": "Paris 13e",
-                "colocation": 0, "charges_incertaines": 0}
+                "colocation": 0, "charges_incertaines": 0, "quartier": None}
         base.update(k)
         return base
 
@@ -395,16 +400,25 @@ class TestAnalyse(unittest.TestCase):
     def test_verdict_et_comparaison(self):
         moins_cher = analyse.analyser(self.ligne(prix_cc=750), [30.0] * 6)   # 25 €/m² vs 30
         self.assertEqual(moins_cher.verdict, "🟢 À saisir")
+        # Paris 13e : emplacement 4, prix -17 % : 5, logement 30 m² : 4, frais inconnus : 3, transports 5
+        self.assertEqual(moins_cher.notes, {"Emplacement": 4, "Prix": 5, "Logement": 4, "Frais": 3,
+                                            "Transports": 5})
+        self.assertEqual(moins_cher.note_globale, 4.2)
         self.assertIn("17 % moins cher que la médiane", moins_cher.lignes[0])
         cher = analyse.analyser(self.ligne(prix_cc=900, surface=20.0), [30.0] * 6)  # 45 €/m²
-        self.assertEqual(cher.verdict, "🔴 Bof")
+        self.assertEqual(cher.notes["Prix"], 1)
+        self.assertEqual(cher.verdict, "🟡 Correct")  # bien placé, mais cher
         self.assertIn("loyers encadrés ici : vérifiez le plafond légal", cher.contre)
-        peu = analyse.analyser(self.ligne(), [30.0] * 2)
+        peu = analyse.analyser(self.ligne(), [30.0] * 2, prix_max=900)
         self.assertIn("comparaison dès 5 annonces", peu.lignes[0])
+        self.assertEqual((peu.notes["Prix"], peu.repere_prix), (2, "vs votre budget"))
+        self.assertIsNone(analyse.analyser(self.ligne(), []).notes["Prix"])
 
     def test_alertes_legales(self):
         r = analyse.analyser(self.ligne(texte="DPE G, honoraires 900 €", surface=8.0, prix_cc=500), [])
-        self.assertEqual(r.verdict, "🔴 Bof")
+        self.assertEqual(r.verdict, "🔴 Bof")   # forcé, quelle que soit la note
+        self.assertEqual(r.notes["Frais"], 1)
+        self.assertEqual(r.notes["Logement"], 1)
         self.assertTrue(any("DPE G" in c for c in r.contre))
         self.assertTrue(any("plafond légal (~120 €)" in c for c in r.contre))
         self.assertTrue(any("minimum légal de 9 m²" in c for c in r.contre))
@@ -413,7 +427,8 @@ class TestAnalyse(unittest.TestCase):
         r = analyse.analyser(self.ligne(texte="meublé, dont 50 € de charges", source="PAP"), [], revenu_net=2700)
         # 900 + dépôt 2 × 850 (meublé) + 0 € de frais (particulier)
         self.assertIn("💰 Entrée ≈ 2 600 €", "\n".join(r.lignes))
-        self.assertIn("📊 33 % de vos revenus nets", r.lignes)
+        self.assertIn("👛 33 % de vos revenus nets", r.lignes)
+        self.assertEqual(r.notes["Frais"], 5)  # particulier
 
 
 class TestGmail(unittest.TestCase):

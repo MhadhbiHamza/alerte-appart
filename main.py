@@ -102,7 +102,8 @@ def boutons_annonce(annonce) -> telegram.Boutons:
 def analyser(cfg: Config, db: Stockage, annonce) -> analyse.Analyse:
     return analyse.analyser(
         annonce, db.prix_m2_zone(annonce["ville"], bool(annonce["colocation"]), annonce["id"]),
-        prioritaire=annonce["ville"] in cfg.priorites, revenu_net=cfg.revenu_net_mensuel or None)
+        prioritaire=annonce["ville"] in cfg.priorites, revenu_net=cfg.revenu_net_mensuel or None,
+        prix_max=cfg.prix_max_coloc if annonce["colocation"] else cfg.prix_max)
 
 
 def message_telegram(cfg: Config, annonce, message: str, resume: analyse.Analyse) -> str:
@@ -114,11 +115,17 @@ def message_telegram(cfg: Config, annonce, message: str, resume: analyse.Analyse
         lignes.append("⭐ <b>ZONE PRIORITAIRE</b>")
     type_ = "👥 Colocation" if annonce["colocation"] else "🏠 Location (logement entier)"
     lignes += [
-        f"<b>{resume.verdict}</b> — {type_} · {e(v['source'])}",
+        f"<b>{resume.verdict} · {resume.note_globale:g}/5</b> — {type_} · {e(v['source'])}".replace(".", ","),
         f"📍 <b>{e(v['ville'])}</b> · {e(v['surface'])} m² · <b>{e(v['prix'])} € CC</b>",
     ]
     if v["quartier"]:
         lignes.append(f"📌 Quartier : {e(v['quartier'])}")
+    # Notes sur 5, une par ligne
+    for critere, note in resume.notes.items():
+        precision = f" <i>({resume.repere_prix})</i>" if critere == "Prix" and resume.repere_prix else ""
+        lignes.append(f"<code>{critere:<12}</code>{analyse.etoiles(note)} {note}/5{precision}" if note
+                      else f"<code>{critere:<12}</code>– (pas assez de données)")
+    lignes.append("")
     lignes += [e(l) for l in resume.lignes]
     if resume.pour:
         lignes.append("✅ <b>Pour</b> : " + e(", ".join(resume.pour)))
@@ -167,7 +174,8 @@ def notifier_annonces(cfg: Config, db: Stockage) -> None:
         if photos:
             try:
                 telegram.envoyer_photos(cfg.telegram_token, cfg.telegram_chat_id, photos,
-                                        f"{resume.verdict} · {annonce['ville']} · {annonce['prix_cc']} € CC")
+                                        f"{resume.verdict} {resume.note_globale:g}/5 · {annonce['ville']} · "
+                                        f"{annonce['prix_cc']} € CC")
                 album_ok = True
             except RuntimeError as exc:
                 log.warning("Photos non affichables par Telegram (%s)", exc)
@@ -178,7 +186,8 @@ def notifier_annonces(cfg: Config, db: Stockage) -> None:
             boutons=boutons_annonce(annonce),
             apercu=None if album_ok else annonce["lien"],
         )
-        db.maj(annonce["id"], notifiee_le=maintenant(), message_id=message_id, verdict=resume.verdict)
+        db.maj(annonce["id"], notifiee_le=maintenant(), message_id=message_id, verdict=resume.verdict,
+               note=resume.note_globale)
         log.info("Notification envoyée pour l'annonce #%d (%s)", annonce["id"], resume.verdict)
 
 
@@ -289,6 +298,7 @@ def mettre_a_jour_csv(cfg: Config, db: Stockage) -> None:
             "date": a["notifiee_le"].replace("T", " "),
             "source": a["source"],
             "verdict": a["verdict"] or "",
+            "note": f"{a['note']:g}/5".replace(".", ",") if a["note"] else "",
             "annonce": ("⭐ " if a["ville"] in cfg.priorites else "")
                        + ("Coloc – " if a["colocation"] else "")
                        + f"{v['ville']} – {v['surface']} m² – {v['prix']} € CC",

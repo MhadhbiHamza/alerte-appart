@@ -38,7 +38,21 @@ L'outil lui-même ne visite aucun site.
 
 ### Le résumé « est-ce que ça vaut le coup ? »
 
-Chaque notification commence par un verdict **🟢 À saisir / 🟡 Correct / 🔴 Bof**, suivi de :
+Chaque notification commence par un verdict et une **note globale sur 5**, puis 5 notes détaillées :
+
+| Note | Comment elle est calculée |
+|---|---|
+| **Emplacement** | Vos priorités : 5 · Paris intramuros : 4 · proche banlieue : 3 · options secondaires : 2 · +1 si un quartier de votre liste est cité |
+| **Prix** | Écart avec la médiane €/m² de la zone : ≤ −15 % : 5 · ≤ −5 % : 4 · ± 5 % : 3 · ≤ +15 % : 2 · au-delà : 1. Tant qu'il y a moins de 5 annonces vues dans la zone, prix comparé à votre budget (« vs votre budget ») |
+| **Logement** | Base 3 · +1 extérieur · +1 grande surface (≥ 30 m², chambre ≥ 12 m²) · +1 bon DPE (A-C) · +0,5 rénové/lumineux/calme · −1 petite surface, DPE F, étage élevé sans ascenseur · −2 DPE G ou < 9 m² |
+| **Frais** | 0 € (particulier) : 5 · ≤ moitié du plafond légal : 4 · inconnus : 3 · proches du plafond : 2 · au-dessus du plafond : 1 |
+| **Transports** | Métros + RER : 5 · métro + train : 4 · une seule ligne de métro : 3 · RER/train/tram seulement : 2 · +1 si une station est citée |
+
+Verdict : **🟢 À saisir** si la note globale ≥ 4, **🔴 Bof** si < 3 ou en cas de problème grave
+(DPE G, moins de 9 m², frais au-dessus du plafond légal), sinon **🟡 Correct**. Les tableaux de notes
+sont dans `analyse.py` (`EMPLACEMENT`, `NOTE_TRANSPORTS`) si vous voulez les ajuster.
+
+Viennent ensuite :
 
 | Ligne | Contenu |
 |---|---|
@@ -46,7 +60,7 @@ Chaque notification commence par un verdict **🟢 À saisir / 🟡 Correct / �
 | 💶 | Prix au m², comparé à la **médiane des annonces déjà reçues dans la même zone** (dès 5 annonces vues) |
 | 🧾 | Charges (si indiquées), frais d'agence indiqués, ou **plafond légal** (loi ALUR : 15 €/m² max en zone très tendue) ; 0 € chez un particulier (PAP) |
 | 💰 | Budget d'entrée estimé : 1er loyer + dépôt de garantie (1 mois hors charges, 2 si meublé) + frais |
-| 📊 | Part du loyer dans vos revenus, si `REVENU_NET_MENSUEL` est rempli dans `.env` |
+| 👛 | Part du loyer dans vos revenus, si `REVENU_NET_MENSUEL` est rempli dans `.env` |
 | 🏢 ✨ | Pièces, meublé/vide, étage, ascenseur, DPE, disponibilité, atouts (balcon, parking…) quand l'annonce les cite |
 | 🚇 | Principales lignes de métro/RER/tram de la zone (repère indicatif) + stations citées dans l'annonce |
 | ✅ / ⚠️ | Les raisons du verdict : prix sous/au-dessus de la médiane, sans frais, DPE F/G, surface < 9 m², étage élevé sans ascenseur, frais au-dessus du plafond… |

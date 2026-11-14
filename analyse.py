@@ -134,6 +134,33 @@ def frais_agence_max(surface: Optional[float]) -> Optional[int]:
     return round(surface * FRAIS_AGENCE_MAX_M2) if surface else None
 
 
+# Note « emplacement » de base, d'après vos groupes de villes (les priorités valent 5/5).
+EMPLACEMENT = {
+    **{f"Paris {n}e": 4 for n in (11, 12, 13, 14, 15)},
+    **{v: 3 for v in ("Ivry-sur-Seine", "Maisons-Alfort", "Clamart", "Asnières-sur-Seine", "Bois-Colombes",
+                      "Vitry-sur-Seine", "Saint-Denis", "Montreuil", "Meudon")},
+    **{v: 2 for v in ("Vincennes", "Charenton-le-Pont", "Montrouge", "Clichy", "Boulogne-Billancourt",
+                      "Issy-les-Moulineaux")},
+}
+# Note « transports » : métros + RER = 5 ; métro + train = 4 ; une seule ligne de métro = 3 ;
+# seulement RER / train / tram = 2.
+NOTE_TRANSPORTS = {
+    **{f"Paris {n}e": 5 for n in (11, 12, 13, 14, 15)},
+    **{v: 4 for v in ("Saint-Denis", "Ivry-sur-Seine", "Maisons-Alfort", "Asnières-sur-Seine", "Montreuil",
+                      "Vincennes", "Boulogne-Billancourt", "Issy-les-Moulineaux")},
+    **{v: 3 for v in ("Charenton-le-Pont", "Montrouge", "Clichy")},
+    **{v: 2 for v in ("Vitry-sur-Seine", "Meudon", "Clamart", "Bois-Colombes")},
+}
+
+
+def _borner(note: float) -> int:
+    return int(max(1, min(5, round(note))))
+
+
+def etoiles(note: int) -> str:
+    return "★" * note + "☆" * (5 - note)
+
+
 @dataclass
 class Analyse:
     verdict: str
@@ -141,19 +168,28 @@ class Analyse:
     pour: List[str]
     contre: List[str]
     prix_m2: Optional[float] = None
+    notes: dict = field(default_factory=dict)   # {"Emplacement": 4, "Prix": 3, …}
+    note_globale: float = 0.0
+    repere_prix: str = ""                        # « vs votre budget » si pas encore de comparaison
 
 
 def analyser(annonce, prix_m2_zone: List[float], prioritaire: bool = False,
-             revenu_net: Optional[int] = None) -> Analyse:
-    """Construit le résumé. `annonce` : ligne de la base ; `prix_m2_zone` : €/m² des autres
-    annonces de la même zone et du même type (location / colocation)."""
+             revenu_net: Optional[int] = None, prix_max: Optional[int] = None) -> Analyse:
+    """Construit le résumé et les notes sur 5.
+
+    `annonce` : ligne de la base ; `prix_m2_zone` : €/m² des autres annonces de la même zone
+    et du même type (location / colocation) ; `prix_max` : votre budget (repère de prix
+    tant qu'il n'y a pas assez d'annonces pour comparer).
+    """
     d = extraire_details(annonce["texte"] or "", annonce["source"] or "")
     prix, surface, ville = annonce["prix_cc"], annonce["surface"], annonce["ville"]
     coloc = bool(annonce["colocation"])
-    lignes, pour, contre, points = [], [], [], 0
+    lignes, pour, contre = [], [], []
+    alerte_rouge = False  # problème grave : verdict 🔴 quelle que soit la note
 
-    # Prix au m² comparé à ce que vous avez déjà reçu dans la zone
+    # --- Prix -----------------------------------------------------------------
     prix_m2 = round(prix / surface, 1) if prix and surface else None
+    note_prix, repere_prix = None, ""
     if prix_m2:
         ligne = f"💶 {prix_m2:g} €/m²".replace(".", ",")
         if len(prix_m2_zone) >= 5:
@@ -161,42 +197,51 @@ def analyser(annonce, prix_m2_zone: List[float], prioritaire: bool = False,
             ecart = round((prix_m2 / mediane - 1) * 100)
             ligne += (f" · {abs(ecart)} % {'moins cher' if ecart < 0 else 'plus cher'} que la médiane "
                       f"({mediane:.0f} €/m², {len(prix_m2_zone)} annonces vues ici)")
-            if ecart <= -10:
-                points += 2; pour.append(f"prix {abs(ecart)} % sous la médiane de la zone")
-            elif ecart <= -3:
-                points += 1; pour.append("prix un peu sous la médiane")
-            elif ecart >= 10:
-                points -= 2; contre.append(f"prix {ecart} % au-dessus de la médiane de la zone")
-                if ville in LOYERS_ENCADRES or (ville or "").startswith("Paris"):
+            note_prix = 5 if ecart <= -15 else 4 if ecart <= -5 else 3 if ecart < 5 else 2 if ecart < 15 else 1
+            if ecart <= -5:
+                pour.append(f"prix {abs(ecart)} % sous la médiane de la zone")
+            elif ecart >= 5:
+                contre.append(f"prix {ecart} % au-dessus de la médiane de la zone")
+                if ecart >= 10 and (ville in LOYERS_ENCADRES or (ville or "").startswith("Paris")):
                     contre.append("loyers encadrés ici : vérifiez le plafond légal")
-            elif ecart >= 3:
-                points -= 1; contre.append("prix un peu au-dessus de la médiane")
         else:
             ligne += f" · comparaison dès 5 annonces vues ici ({len(prix_m2_zone)} pour l'instant)"
         lignes.append(ligne)
+    if note_prix is None and prix and prix_max:
+        # Pas encore assez d'annonces : on situe le prix par rapport à votre budget.
+        r = prix / prix_max
+        note_prix = 5 if r <= 0.7 else 4 if r <= 0.8 else 3 if r <= 0.9 else 2
+        repere_prix = "vs votre budget"
 
-    # Charges et frais d'agence
+    # --- Charges, frais d'agence, budget ---------------------------------------
     morceaux = []
     if d.charges is not None:
         morceaux.append(f"charges {d.charges} € incluses")
     elif annonce["charges_incertaines"]:
         morceaux.append("prix HC, charges inconnues")
-        points -= 1; contre.append("charges non précisées (prix hors charges)")
+        contre.append("charges non précisées (prix hors charges)")
+        if note_prix:
+            note_prix = _borner(note_prix - 1)
     else:
         morceaux.append("charges non détaillées")
     maxi = frais_agence_max(surface)
     if d.frais_agence == 0:
         morceaux.append("0 € de frais d'agence")
-        points += 1; pour.append("sans frais d'agence")
+        pour.append("sans frais d'agence")
+        note_frais = 5
     elif d.frais_agence:
         morceaux.append(f"frais d'agence {d.frais_agence} €")
         if maxi and d.frais_agence > maxi:
-            points -= 2; contre.append(f"frais d'agence au-dessus du plafond légal (~{maxi} €)")
-    elif maxi:
-        morceaux.append(f"frais d'agence ≤ {maxi} € (plafond légal)")
+            contre.append(f"frais d'agence au-dessus du plafond légal (~{maxi} €)")
+            alerte_rouge, note_frais = True, 1
+        else:
+            note_frais = 4 if maxi and d.frais_agence <= maxi / 2 else 3 if maxi and d.frais_agence <= maxi * 0.8 else 2
+    else:
+        if maxi:
+            morceaux.append(f"frais d'agence ≤ {maxi} € (plafond légal)")
+        note_frais = 3  # inconnus
     lignes.append("🧾 " + " · ".join(morceaux))
 
-    # Budget d'entrée : 1er loyer + dépôt de garantie (1 mois HC vide, 2 mois HC meublé) + frais
     if prix:
         loyer_hc = prix - (d.charges or 0)
         depot = loyer_hc * (2 if d.meuble else 1)
@@ -205,11 +250,11 @@ def analyser(annonce, prix_m2_zone: List[float], prioritaire: bool = False,
                       f"{' 2 mois (meublé)' if d.meuble else ''} + frais)".replace(",", " "))
     if prix and revenu_net:
         ratio = round(prix / revenu_net * 100)
-        lignes.append(f"📊 {ratio} % de vos revenus nets")
+        lignes.append(f"👛 {ratio} % de vos revenus nets")
         if ratio > 33:
-            points -= 1; contre.append(f"loyer = {ratio} % de vos revenus (souvent ≤ 33 % demandé)")
+            contre.append(f"loyer = {ratio} % de vos revenus (souvent ≤ 33 % demandé)")
 
-    # Logement
+    # --- Logement -------------------------------------------------------------
     infos = []
     if d.pieces:
         infos.append("studio" if d.pieces == 1 else f"{d.pieces} pièces")
@@ -227,33 +272,54 @@ def analyser(annonce, prix_m2_zone: List[float], prioritaire: bool = False,
         lignes.append("🏢 " + " · ".join(infos))
     if d.atouts:
         lignes.append("✨ " + ", ".join(d.atouts))
-        if {"balcon", "terrasse", "jardin"} & set(d.atouts):
-            points += 1; pour.append("extérieur")
 
+    note_logement = 3.0
+    if {"balcon", "terrasse", "jardin"} & set(d.atouts):
+        note_logement += 1; pour.append("extérieur")
+    if {"rénové", "lumineux", "calme"} & set(d.atouts):
+        note_logement += 0.5
+    if surface:
+        grand, petit = (12, 9) if coloc else (30, 15)
+        if surface >= grand:
+            note_logement += 1
+        elif surface < petit:
+            note_logement -= 1
     if d.dpe == "G":
-        points -= 3; contre.append("DPE G : location interdite depuis 2025")
+        contre.append("DPE G : location interdite depuis 2025")
+        alerte_rouge = True; note_logement -= 2
     elif d.dpe == "F":
-        points -= 1; contre.append("DPE F : passoire thermique (interdit à la location en 2028)")
+        contre.append("DPE F : passoire thermique (interdit à la location en 2028)")
+        note_logement -= 1
     elif d.dpe in ("A", "B", "C"):
-        points += 1; pour.append(f"bon DPE ({d.dpe})")
+        pour.append(f"bon DPE ({d.dpe})"); note_logement += 1
     if surface and surface < SURFACE_MIN_DECENCE:
-        points -= 2; contre.append(f"{surface:g} m² : sous le minimum légal de {SURFACE_MIN_DECENCE} m²")
+        contre.append(f"{surface:g} m² : sous le minimum légal de {SURFACE_MIN_DECENCE} m²")
+        alerte_rouge = True; note_logement -= 2
     if d.etage and d.etage >= 4 and d.ascenseur is False:
-        points -= 1; contre.append(f"{d.etage}e étage sans ascenseur")
+        contre.append(f"{d.etage}e étage sans ascenseur"); note_logement -= 1
 
-    # Transports
+    # --- Emplacement et transports ----------------------------------------------
     ligne = f"🚇 {TRANSPORTS.get(ville, 'lignes : voir le plan')}"
     if d.transports_cites:
         ligne += " — cité : " + ", ".join(d.transports_cites)
     lignes.append(ligne)
-
+    note_emplacement = 5 if prioritaire else EMPLACEMENT.get(ville, 2)
+    if annonce["quartier"] and not prioritaire:
+        note_emplacement += 1  # un quartier de votre liste est cité
     if prioritaire:
-        points += 1; pour.append("zone prioritaire")
+        pour.append("zone prioritaire")
+    note_transports = NOTE_TRANSPORTS.get(ville, 2) + (1 if d.transports_cites else 0)
 
-    if points >= 2:
-        verdict = "🟢 À saisir"
-    elif points <= -2:
+    # --- Notes et verdict ---------------------------------------------------------
+    notes = {"Emplacement": _borner(note_emplacement), "Prix": note_prix and _borner(note_prix),
+             "Logement": _borner(note_logement), "Frais": _borner(note_frais),
+             "Transports": _borner(note_transports)}
+    connues = [n for n in notes.values() if n]
+    note_globale = round(sum(connues) / len(connues), 1) if connues else 0.0
+    if alerte_rouge or note_globale < 3:
         verdict = "🔴 Bof"
+    elif note_globale >= 4:
+        verdict = "🟢 À saisir"
     else:
         verdict = "🟡 Correct"
-    return Analyse(verdict, lignes, pour, contre, prix_m2)
+    return Analyse(verdict, lignes, pour, contre, prix_m2, notes, note_globale, repere_prix)
