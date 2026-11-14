@@ -52,6 +52,20 @@ def envoyer(token: str, chat_id: str, texte_html: str,
     return _appel(token, "sendMessage", donnees)["message_id"]
 
 
+def envoyer_photos(token: str, chat_id: str, photos: List[str], legende: str = "") -> None:
+    """Envoie les photos de l'annonce (1 photo, ou un album de 2 à 10 photos).
+
+    Ce sont les adresses d'images présentes dans l'email d'alerte : c'est Telegram
+    qui les télécharge et les affiche.
+    """
+    if len(photos) == 1:
+        _appel(token, "sendPhoto", {"chat_id": chat_id, "photo": photos[0], "caption": legende[:1024]})
+    elif photos:
+        album = [{"type": "photo", "media": url} for url in photos[:10]]
+        album[0]["caption"] = legende[:1024]
+        _appel(token, "sendMediaGroup", {"chat_id": chat_id, "media": album})
+
+
 def mises_a_jour(token: str, offset: int, attente: int) -> list:
     """Attend jusqu'à `attente` secondes vos appuis sur les boutons (« long polling »)."""
     return _appel(token, "getUpdates",

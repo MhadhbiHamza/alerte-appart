@@ -36,6 +36,7 @@ class Config:
     prix_max_coloc: int = 600
     email_reponse: str = ""
     nom_expediteur: str = ""
+    revenu_net_mensuel: int = 0
 
 
 def _chemin(valeur: str) -> Path:
@@ -101,6 +102,7 @@ def charger_config() -> Config:
         prix_max_coloc=int(g("PRIX_MAX_COLOC", "600")),
         email_reponse=g("EMAIL_REPONSE", "").strip(),
         nom_expediteur=g("NOM_EXPEDITEUR", "").strip(),
+        revenu_net_mensuel=int(g("REVENU_NET_MENSUEL", "0") or 0),
     )
 
 

@@ -19,6 +19,7 @@ import main  # noqa: E402
 import modele  # noqa: E402
 import suivi  # noqa: E402
 import zones  # noqa: E402
+import analyse  # noqa: E402
 import config  # noqa: E402
 from config import Config, _zones  # noqa: E402
 from stockage import Stockage  # noqa: E402
@@ -236,6 +237,7 @@ class TestCycleComplet(unittest.TestCase):
             mock.patch.object(main.gmail, "envoyer_email"),
             mock.patch.object(main.telegram, "envoyer", side_effect=lambda *a, **k: 900 + len(self.envoyes())),
             mock.patch.object(main.telegram, "mises_a_jour", side_effect=self._faux_clics),
+            mock.patch.object(main.telegram, "envoyer_photos"),
             mock.patch.object(main.telegram, "repondre_clic"),
             mock.patch.object(main.telegram, "modifier_boutons"),
         ]
@@ -262,15 +264,25 @@ class TestCycleComplet(unittest.TestCase):
         textes = [c[0][2] for c in self.envoyes()]
         ivry, coloc = textes[2], textes[3]
         self.assertIn("⭐", ivry)
-        self.assertIn("📍 Ivry-sur-Seine · 33 m² · <b>870 € CC</b>", ivry)
-        self.assertIn("Quartier repéré : Mairie d'Ivry", ivry)
+        self.assertIn("📍 <b>Ivry-sur-Seine</b> · 33 m² · <b>870 € CC</b>", ivry)
+        self.assertIn("cité : Mairie d'Ivry", ivry)
+        self.assertIn("📌 Quartier : Mairie d'Ivry", ivry)
         self.assertIn("à Ivry-sur-Seine, proposé à 870 €", ivry)
         self.assertNotIn("⭐", textes[0])
         self.assertIn("👥 Colocation", coloc)
         self.assertIn("chambre en colocation à Montrouge", coloc)
         # aperçu = photo de l'email si présente, sinon le lien de l'annonce
-        self.assertEqual(self.envoyes()[3][1]["apercu"], "https://img.jinka.fr/photos/coloc1.jpg")
+        # photos de l'email -> album, puis résumé sans aperçu ; sans photo -> aperçu du lien
+        self.m["envoyer_photos"].assert_called_once()
+        self.assertEqual(self.m["envoyer_photos"].call_args[0][2], ["https://img.jinka.fr/photos/coloc1.jpg"])
+        self.assertIsNone(self.envoyes()[3][1]["apercu"])
         self.assertEqual(self.envoyes()[0][1]["apercu"], "https://t.jinka.fr/c/abc111")
+        # résumé « en un coup d'œil »
+        self.assertIn("🏠 Location (logement entier)", textes[0])
+        self.assertRegex(textes[0], r"<b>(🟢 À saisir|🟡 Correct|🔴 Bof)</b>")
+        self.assertIn("€/m²", textes[0])
+        self.assertIn("🚇 M7 · RER C", ivry)
+        self.assertIn("0 € de frais d'agence", ivry)  # PAP = particulier
         # boutons : Postuler/Brouillon/Pas intéressé si email d'agence, sinon « J'ai postulé »
         seloger = self.envoyes()[1][1]["boutons"]
         self.assertEqual([d for ligne in seloger for _, d in ligne], ["postuler:4", "brouillon:4", "refuser:4"])
@@ -303,6 +315,7 @@ class TestCycleComplet(unittest.TestCase):
         self.assertEqual(lignes["7"]["statut"], "nouveau")
         self.assertTrue(lignes["6"]["annonce"].startswith("⭐ Ivry-sur-Seine"))
         self.assertTrue(lignes["7"]["annonce"].startswith("Coloc – Montrouge"))
+        self.assertIn(lignes["7"]["verdict"], ("🟢 À saisir", "🟡 Correct", "🔴 Bof"))
 
         # 2e passage : rien de nouveau
         main.boucle(self.cfg, self.db, une_fois=True)
@@ -318,6 +331,12 @@ class TestCycleComplet(unittest.TestCase):
         self.assertIsNone(rappels[0][1]["boutons"])
         self.assertIn("pas encore répondu", rappels[2][0][2])
         self.assertEqual(rappels[2][1]["boutons"][0][0][1], "postuler:7")
+
+    def test_photos_refusees_par_telegram(self):
+        self.m["envoyer_photos"].side_effect = RuntimeError("Bad Request: wrong file identifier")
+        main.boucle(self.cfg, self.db, une_fois=True)
+        self.assertEqual(len(self.envoyes()), 4)  # le résumé part quand même
+        self.assertEqual(self.envoyes()[3][1]["apercu"], "https://www.jinka.fr/c/coloc1")
 
     def test_brouillon_et_pdf_manquant(self):
         main.boucle(self.cfg, self.db, une_fois=True)
@@ -353,6 +372,48 @@ class TestReseau(unittest.TestCase):
         self.assertEqual(len(logs.output), 2)
         self.assertIn("Connexion Internet perdue", logs.output[0])
         self.assertIn("Connexion rétablie", logs.output[1])
+
+
+class TestAnalyse(unittest.TestCase):
+    def ligne(self, **k):
+        base = {"texte": "", "source": "SeLoger", "prix_cc": 900, "surface": 30.0, "ville": "Paris 13e",
+                "colocation": 0, "charges_incertaines": 0}
+        base.update(k)
+        return base
+
+    def test_details(self):
+        d = analyse.extraire_details(
+            "Appartement T2 meublé 30 m², 5e étage sans ascenseur, balcon, DPE : D, 900 € dont 60 € de charges, "
+            "honoraires : 390 €, disponible le 01/12, métro Place d'Italie, RER C", "SeLoger")
+        self.assertEqual((d.pieces, d.meuble, d.etage, d.ascenseur, d.dpe, d.charges, d.frais_agence, d.disponible),
+                         (2, True, 5, False, "D", 60, 390, "01/12"))
+        self.assertIn("balcon", d.atouts)
+        self.assertEqual(d.transports_cites, ["Place d'Italie", "RER C"])
+        self.assertEqual(analyse.extraire_details("Studio vide", "PAP").frais_agence, 0)
+        self.assertEqual(analyse.extraire_details("Studio", "Jinka").pieces, 1)
+
+    def test_verdict_et_comparaison(self):
+        moins_cher = analyse.analyser(self.ligne(prix_cc=750), [30.0] * 6)   # 25 €/m² vs 30
+        self.assertEqual(moins_cher.verdict, "🟢 À saisir")
+        self.assertIn("17 % moins cher que la médiane", moins_cher.lignes[0])
+        cher = analyse.analyser(self.ligne(prix_cc=900, surface=20.0), [30.0] * 6)  # 45 €/m²
+        self.assertEqual(cher.verdict, "🔴 Bof")
+        self.assertIn("loyers encadrés ici : vérifiez le plafond légal", cher.contre)
+        peu = analyse.analyser(self.ligne(), [30.0] * 2)
+        self.assertIn("comparaison dès 5 annonces", peu.lignes[0])
+
+    def test_alertes_legales(self):
+        r = analyse.analyser(self.ligne(texte="DPE G, honoraires 900 €", surface=8.0, prix_cc=500), [])
+        self.assertEqual(r.verdict, "🔴 Bof")
+        self.assertTrue(any("DPE G" in c for c in r.contre))
+        self.assertTrue(any("plafond légal (~120 €)" in c for c in r.contre))
+        self.assertTrue(any("minimum légal de 9 m²" in c for c in r.contre))
+
+    def test_budget_et_revenus(self):
+        r = analyse.analyser(self.ligne(texte="meublé, dont 50 € de charges", source="PAP"), [], revenu_net=2700)
+        # 900 + dépôt 2 × 850 (meublé) + 0 € de frais (particulier)
+        self.assertIn("💰 Entrée ≈ 2 600 €", "\n".join(r.lignes))
+        self.assertIn("📊 33 % de vos revenus nets", r.lignes)
 
 
 class TestGmail(unittest.TestCase):

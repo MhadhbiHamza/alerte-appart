@@ -13,7 +13,7 @@ pour vérifier ce qui est extrait de vos vrais emails.
 """
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from email.message import EmailMessage
 from email.utils import parseaddr
 from typing import Iterator, List, Optional, Tuple
@@ -94,7 +94,8 @@ class Annonce:
     ville: Optional[str] = None      # « Paris 13e », « Ivry-sur-Seine »…
     quartier: Optional[str] = None   # quartier de votre liste, s'il est cité
     colocation: bool = False
-    photo: Optional[str] = None      # adresse de la photo présente dans l'email d'alerte
+    photo: Optional[str] = None      # 1re photo présente dans l'email d'alerte
+    photos: List[str] = field(default_factory=list)  # toutes les photos de la carte (max 10)
     email_contact: Optional[str] = None
     telephone: Optional[str] = None
 
@@ -202,8 +203,9 @@ def _nb_annonces(texte: str) -> int:
     return n if n else len(PRIX_RE.findall(texte))
 
 
-def _photo(bloc) -> Optional[str]:
-    """Première vraie photo de la carte d'annonce (déjà présente dans l'email)."""
+def _photos(bloc) -> List[str]:
+    """Vraies photos de la carte d'annonce (déjà présentes dans l'email), 10 au plus."""
+    photos = []
     for img in bloc.find_all("img", src=True):
         src = img["src"].strip()
         if not src.lower().startswith("http") or PHOTO_IGNORE_RE.search(src):
@@ -211,12 +213,13 @@ def _photo(bloc) -> Optional[str]:
         largeur, hauteur = str(img.get("width", "")), str(img.get("height", ""))
         if (largeur.isdigit() and int(largeur) < 80) or (hauteur.isdigit() and int(hauteur) < 60):
             continue
-        return src
-    return None
+        if src not in photos:
+            photos.append(src)
+    return photos[:10]
 
 
-def _blocs_html(html: str) -> Iterator[Tuple[str, str, Optional[str]]]:
-    """Renvoie (texte du bloc, lien de l'annonce, photo) pour chaque carte d'annonce."""
+def _blocs_html(html: str) -> Iterator[Tuple[str, str, List[str]]]:
+    """Renvoie (texte du bloc, lien de l'annonce, photos) pour chaque carte d'annonce."""
     soup = BeautifulSoup(html, "html.parser")
     for balise in soup(["script", "style", "head"]):
         balise.decompose()
@@ -258,10 +261,10 @@ def _blocs_html(html: str) -> Iterator[Tuple[str, str, Optional[str]]]:
             a["href"].split(":", 1)[1].split("?")[0]
             for a in bloc.find_all("a", href=re.compile(r"^(mailto|tel):", re.I))
         )
-        yield texte(bloc) + " " + contacts, liens[0][2], _photo(bloc)
+        yield texte(bloc) + " " + contacts, liens[0][2], _photos(bloc)
 
 
-def _blocs_texte(texte: str) -> Iterator[Tuple[str, str, Optional[str]]]:
+def _blocs_texte(texte: str) -> Iterator[Tuple[str, str, List[str]]]:
     """Version de secours pour les emails sans HTML : un paragraphe = une annonce."""
     paragraphes = re.split(r"\n\s*\n", normaliser(texte))
     for i, p in enumerate(paragraphes):
@@ -270,7 +273,7 @@ def _blocs_texte(texte: str) -> Iterator[Tuple[str, str, Optional[str]]]:
         urls = URL_RE.findall(p) or (URL_RE.findall(paragraphes[i + 1]) if i + 1 < len(paragraphes) else [])
         urls = [u for u in urls if not LIEN_IGNORE_RE.search(u)]
         if urls:
-            yield p, urls[0], None
+            yield p, urls[0], []
 
 
 def corps_email(msg: EmailMessage) -> Tuple[Optional[str], Optional[str]]:
@@ -305,7 +308,7 @@ def extraire_annonces(msg: EmailMessage, a_exclure=()) -> List[Annonce]:
         blocs = list(_blocs_texte(texte))
 
     annonces, liens_vus = [], set()
-    for bloc, lien, photo in blocs:
+    for bloc, lien, photos in blocs:
         if BLOC_IGNORE_RE.search(bloc) or lien in liens_vus:
             continue
         liens_vus.add(lien)
@@ -314,14 +317,15 @@ def extraire_annonces(msg: EmailMessage, a_exclure=()) -> List[Annonce]:
         annonces.append(Annonce(
             source=source,
             lien=lien,
-            texte=bloc[:500],
+            texte=bloc[:1500],
             prix_cc=prix,
             charges_incertaines=incertain,
             surface=extraire_surface(bloc),
             ville=ville,
             quartier=zones.detecter_quartier(bloc, ville),
             colocation=alerte_coloc or bool(COLOC_RE.search(bloc)),
-            photo=photo,
+            photo=photos[0] if photos else None,
+            photos=photos,
             email_contact=extraire_email(bloc, a_exclure),
             telephone=extraire_telephone(bloc),
         ))

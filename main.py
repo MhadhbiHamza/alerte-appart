@@ -20,11 +20,13 @@ Garanties :
 """
 import argparse
 import imaplib
+import json
 import logging
 import socket
 import time
 from datetime import datetime
 
+import analyse
 import extraction
 import gmail
 import modele
@@ -97,22 +99,33 @@ def boutons_annonce(annonce) -> telegram.Boutons:
     return [[("✅ J'ai postulé sur le site", f"postuler:{id_}"), ("❌ Pas intéressé", f"refuser:{id_}")]]
 
 
-def message_telegram(cfg: Config, annonce, message: str) -> str:
+def analyser(cfg: Config, db: Stockage, annonce) -> analyse.Analyse:
+    return analyse.analyser(
+        annonce, db.prix_m2_zone(annonce["ville"], bool(annonce["colocation"]), annonce["id"]),
+        prioritaire=annonce["ville"] in cfg.priorites, revenu_net=cfg.revenu_net_mensuel or None)
+
+
+def message_telegram(cfg: Config, annonce, message: str, resume: analyse.Analyse) -> str:
+    """Résumé « en un coup d'œil » + message de candidature prêt à copier."""
     e = telegram.echapper
     v = modele.valeurs_annonce(annonce)
     lignes = []
     if annonce["ville"] in cfg.priorites:
         lignes.append("⭐ <b>ZONE PRIORITAIRE</b>")
-    type_ = "👥 Colocation" if annonce["colocation"] else "🏠 Nouvelle annonce"
+    type_ = "👥 Colocation" if annonce["colocation"] else "🏠 Location (logement entier)"
     lignes += [
-        f"<b>{type_}</b> ({e(v['source'])})",
-        f"📍 {e(v['ville'])} · {e(v['surface'])} m² · <b>{e(v['prix'])} € CC</b>",
+        f"<b>{resume.verdict}</b> — {type_} · {e(v['source'])}",
+        f"📍 <b>{e(v['ville'])}</b> · {e(v['surface'])} m² · <b>{e(v['prix'])} € CC</b>",
     ]
     if v["quartier"]:
-        lignes.append(f"📌 Quartier repéré : {e(v['quartier'])}")
-    if annonce["charges_incertaines"]:
-        lignes.append("⚠️ Prix indiqué hors charges, montant des charges inconnu : à vérifier.")
-    lignes.append(f'🔗 <a href="{e(annonce["lien"], True)}">Voir l\'annonce</a>')
+        lignes.append(f"📌 Quartier : {e(v['quartier'])}")
+    lignes += [e(l) for l in resume.lignes]
+    if resume.pour:
+        lignes.append("✅ <b>Pour</b> : " + e(", ".join(resume.pour)))
+    if resume.contre:
+        lignes.append("⚠️ <b>Contre</b> : " + e(", ".join(resume.contre)))
+    lignes.append(f'🔗 <a href="{e(annonce["lien"], True)}">Voir l\'annonce</a> '
+                  "(toutes les photos et la description)")
     if annonce["email_contact"]:
         lignes.append(f"✉️ {e(annonce['email_contact'])}")
     if annonce["telephone"]:
@@ -136,17 +149,37 @@ def message_telegram(cfg: Config, annonce, message: str) -> str:
     return entete + f"<pre>{corps}</pre>"
 
 
+def photos_annonce(annonce) -> list:
+    try:
+        photos = json.loads(annonce["photos"] or "[]")
+    except ValueError:
+        photos = []
+    return photos or ([annonce["photo"]] if annonce["photo"] else [])
+
+
 def notifier_annonces(cfg: Config, db: Stockage) -> None:
     for annonce in db.a_notifier():
         _, message = preparer_candidature(cfg, annonce)
+        resume = analyser(cfg, db, annonce)
+
+        # 1. Les photos de l'email, en album (si Telegram n'arrive pas à les lire, on continue).
+        photos, album_ok = photos_annonce(annonce), False
+        if photos:
+            try:
+                telegram.envoyer_photos(cfg.telegram_token, cfg.telegram_chat_id, photos,
+                                        f"{resume.verdict} · {annonce['ville']} · {annonce['prix_cc']} € CC")
+                album_ok = True
+            except RuntimeError as exc:
+                log.warning("Photos non affichables par Telegram (%s)", exc)
+
+        # 2. Le résumé + les boutons. Sans album, Telegram affiche l'aperçu de la page de l'annonce.
         message_id = telegram.envoyer(
-            cfg.telegram_token, cfg.telegram_chat_id, message_telegram(cfg, annonce, message),
+            cfg.telegram_token, cfg.telegram_chat_id, message_telegram(cfg, annonce, message, resume),
             boutons=boutons_annonce(annonce),
-            # Aperçu : la photo de l'email d'alerte si on l'a, sinon l'annonce elle-même.
-            apercu=annonce["photo"] or annonce["lien"],
+            apercu=None if album_ok else annonce["lien"],
         )
-        db.maj(annonce["id"], notifiee_le=maintenant(), message_id=message_id)
-        log.info("Notification envoyée pour l'annonce #%d", annonce["id"])
+        db.maj(annonce["id"], notifiee_le=maintenant(), message_id=message_id, verdict=resume.verdict)
+        log.info("Notification envoyée pour l'annonce #%d (%s)", annonce["id"], resume.verdict)
 
 
 # --------------------------------------------------------------------------
@@ -255,6 +288,7 @@ def mettre_a_jour_csv(cfg: Config, db: Stockage) -> None:
             "id": a["id"],
             "date": a["notifiee_le"].replace("T", " "),
             "source": a["source"],
+            "verdict": a["verdict"] or "",
             "annonce": ("⭐ " if a["ville"] in cfg.priorites else "")
                        + ("Coloc – " if a["colocation"] else "")
                        + f"{v['ville']} – {v['surface']} m² – {v['prix']} € CC",

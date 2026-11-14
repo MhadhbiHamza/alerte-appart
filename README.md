@@ -31,8 +31,28 @@ Après un appui, les boutons sont remplacés par la décision (ex. « ✅ Dossie
 Seuls les appuis venant de **votre** compte Telegram (`TELEGRAM_CHAT_ID`) sont pris en compte.
 Les boutons réagissent en quelques secondes tant que `python main.py` tourne.
 
-**Aperçu de l'offre.** La notification affiche en grand la photo trouvée dans l'email d'alerte (ou, à défaut,
-l'aperçu de la page de l'annonce généré par Telegram). L'outil lui-même ne visite aucun site.
+**Photos.** Toutes les photos présentes dans l'email d'alerte sont envoyées en album juste avant le résumé
+(souvent 1 à 3 : les sites n'en mettent pas plus dans leurs emails). Sans photo, Telegram affiche l'aperçu de
+la page de l'annonce. Pour toutes les photos et la description complète : « Voir l'annonce ».
+L'outil lui-même ne visite aucun site.
+
+### Le résumé « est-ce que ça vaut le coup ? »
+
+Chaque notification commence par un verdict **🟢 À saisir / 🟡 Correct / 🔴 Bof**, suivi de :
+
+| Ligne | Contenu |
+|---|---|
+| Type | 🏠 Location (logement entier) ou 👥 Colocation, et le site d'origine |
+| 💶 | Prix au m², comparé à la **médiane des annonces déjà reçues dans la même zone** (dès 5 annonces vues) |
+| 🧾 | Charges (si indiquées), frais d'agence indiqués, ou **plafond légal** (loi ALUR : 15 €/m² max en zone très tendue) ; 0 € chez un particulier (PAP) |
+| 💰 | Budget d'entrée estimé : 1er loyer + dépôt de garantie (1 mois hors charges, 2 si meublé) + frais |
+| 📊 | Part du loyer dans vos revenus, si `REVENU_NET_MENSUEL` est rempli dans `.env` |
+| 🏢 ✨ | Pièces, meublé/vide, étage, ascenseur, DPE, disponibilité, atouts (balcon, parking…) quand l'annonce les cite |
+| 🚇 | Principales lignes de métro/RER/tram de la zone (repère indicatif) + stations citées dans l'annonce |
+| ✅ / ⚠️ | Les raisons du verdict : prix sous/au-dessus de la médiane, sans frais, DPE F/G, surface < 9 m², étage élevé sans ascenseur, frais au-dessus du plafond… |
+
+Ces informations viennent uniquement du texte de l'email : si l'alerte ne mentionne pas le DPE ou l'étage,
+ils n'apparaissent pas. Le verdict est un tri rapide, pas un avis définitif : regardez toujours l'annonce.
 
 **Colocation.** Une annonce est considérée comme une colocation si son texte (ou l'objet de l'email d'alerte)
 contient « colocation », « coloc » ou « colocataire ». Elle est alors acceptée jusqu'à `PRIX_MAX_COLOC` (600 €),
@@ -166,7 +186,7 @@ Google n'autorise pas un programme à utiliser votre mot de passe habituel. Il f
    | `TELEGRAM_CHAT_ID` | `123456789` | étape 4 |
 
 3. Les autres réglages ont déjà les bonnes valeurs, modifiables si besoin :
-   `PRIX_MAX_CC=900`, `PRIX_MAX_COLOC=600`, `ZONES=…` (vos 20 zones), `PRIORITES=…` (vos 5 priorités, marquées ⭐),
+   `PRIX_MAX_CC=900`, `PRIX_MAX_COLOC=600`, `REVENU_NET_MENSUEL=…` (facultatif), `ZONES=…` (vos 20 zones), `PRIORITES=…` (vos 5 priorités, marquées ⭐),
    `RELANCE_HEURES=48`, `INTERVALLE_SECONDES=120`, `DOSSIER_PDF=dossier.pdf`, `DOSSIER_IMAP=INBOX`.
 
    Dans `ZONES` et `PRIORITES`, écrivez `Paris 13e` pour un arrondissement, ou le nom d'une commune
@@ -292,6 +312,7 @@ Pour repartir de zéro, arrêtez l'outil et supprimez `annonces.db`.
 | `config.py` | lecture du fichier `.env` |
 | `gmail.py` | lecture des alertes (IMAP), brouillons, envoi des candidatures après « Postuler » (SMTP) |
 | `extraction.py` | découpage des emails en annonces, extraction prix/surface/contact, filtre |
+| `analyse.py` | résumé et verdict de chaque annonce (prix au m², frais, budget, transports…) |
 | `zones.py` | vos communes et arrondissements : reconnaissance de la ville et des quartiers |
 | `stockage.py` | base SQLite `annonces.db` (doublons, état des notifications et relances) |
 | `modele.py` | remplissage de `templates.md` |

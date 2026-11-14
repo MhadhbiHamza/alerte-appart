@@ -3,6 +3,7 @@
 C'est elle qui évite les doublons et qui permet de savoir quand relancer.
 Le fichier annonces.db se crée tout seul au premier lancement.
 """
+import json
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -40,7 +41,10 @@ CREATE TABLE IF NOT EXISTS annonces (
     message_id          INTEGER,               -- numéro du message Telegram
     statut              TEXT,                  -- décision prise avec les boutons Telegram
     candidature         TEXT,                  -- ex. « email envoyé le … »
-    envoye_le           TEXT                   -- date d'envoi du dossier (évite tout double envoi)
+    envoye_le           TEXT,                  -- date d'envoi du dossier (évite tout double envoi)
+    texte               TEXT,                  -- texte de l'annonce dans l'email (pour l'analyse)
+    photos              TEXT,                  -- liste JSON des photos de l'email
+    verdict             TEXT                   -- 🟢 À saisir / 🟡 Correct / 🔴 Bof
 );
 CREATE TABLE IF NOT EXISTS etat (              -- petites valeurs à retenir entre deux lancements
     cle    TEXT PRIMARY KEY,
@@ -54,8 +58,9 @@ CREATE INDEX IF NOT EXISTS idx_lien ON annonces(lien_normalise);
 NOUVELLES_COLONNES = {
     "ville": "TEXT", "quartier": "TEXT", "colocation": "INTEGER DEFAULT 0", "photo": "TEXT",
     "message_id": "INTEGER", "statut": "TEXT", "candidature": "TEXT", "envoye_le": "TEXT",
+    "texte": "TEXT", "photos": "TEXT", "verdict": "TEXT",
 }
-CHAMPS_MODIFIABLES = {"notifiee_le", "message_id", "statut", "candidature", "envoye_le", "brouillon"}
+CHAMPS_MODIFIABLES = {"notifiee_le", "message_id", "statut", "candidature", "envoye_le", "brouillon", "verdict"}
 
 
 def maintenant() -> str:
@@ -95,10 +100,12 @@ class Stockage:
         self.db.execute(
             """INSERT OR IGNORE INTO annonces
                (empreinte, lien, lien_normalise, source, prix_cc, charges_incertaines, surface,
-                ville, quartier, colocation, photo, email_contact, telephone, retenue, raison, vue_le)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ville, quartier, colocation, photo, photos, texte, email_contact, telephone, retenue,
+                raison, vue_le)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (a.empreinte(), a.lien, normaliser_lien(a.lien), a.source, a.prix_cc,
-             int(a.charges_incertaines), a.surface, a.ville, a.quartier, int(a.colocation), a.photo, a.email_contact,
+             int(a.charges_incertaines), a.surface, a.ville, a.quartier, int(a.colocation), a.photo,
+             json.dumps(a.photos), a.texte, a.email_contact,
              a.telephone, int(retenue), raison, maintenant()),
         )
         self.db.commit()
@@ -108,6 +115,15 @@ class Stockage:
         return self.db.execute(
             "SELECT * FROM annonces WHERE retenue=1 AND notifiee_le IS NULL ORDER BY id"
         ).fetchall()
+
+    def prix_m2_zone(self, ville: str, colocation: bool, sauf_id: int) -> List[float]:
+        """€/m² de toutes les annonces vues dans la zone (gardées ou non), même type."""
+        lignes = self.db.execute(
+            "SELECT prix_cc * 1.0 / surface FROM annonces WHERE ville=? AND colocation=? AND id<>? "
+            "AND prix_cc IS NOT NULL AND surface > 0 AND charges_incertaines=0",
+            (ville, int(colocation), sauf_id),
+        ).fetchall()
+        return [l[0] for l in lignes]
 
     def annonce(self, id_: int) -> Optional[sqlite3.Row]:
         return self.db.execute("SELECT * FROM annonces WHERE id=?", (id_,)).fetchone()
