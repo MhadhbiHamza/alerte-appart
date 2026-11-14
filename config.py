@@ -33,6 +33,7 @@ class Config:
     fichier_modele: Path
     fichier_csv: Path
     fichier_db: Path
+    prix_max_coloc: int = 600
 
 
 def _chemin(valeur: str) -> Path:
@@ -95,6 +96,7 @@ def charger_config() -> Config:
         fichier_modele=_chemin(g("FICHIER_MODELE", "templates.md")),
         fichier_csv=_chemin(g("FICHIER_SUIVI", "suivi.csv")),
         fichier_db=_chemin(g("FICHIER_DB", "annonces.db")),
+        prix_max_coloc=int(g("PRIX_MAX_COLOC", "600")),
     )
 
 

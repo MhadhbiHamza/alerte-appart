@@ -6,7 +6,7 @@ Le fichier annonces.db se crée tout seul au premier lancement.
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from extraction import Annonce, normaliser_lien
 
@@ -34,10 +34,28 @@ CREATE TABLE IF NOT EXISTS annonces (
     notifiee_le         TEXT,                  -- NULL = notification Telegram pas encore envoyée
     brouillon           TEXT,                  -- 'oui', 'non' ou message d'erreur
     csv_ecrit           INTEGER DEFAULT 0,
-    relance_envoyee     INTEGER DEFAULT 0
+    relance_envoyee     INTEGER DEFAULT 0,
+    colocation          INTEGER DEFAULT 0,
+    photo               TEXT,                  -- photo trouvée dans l'email d'alerte
+    message_id          INTEGER,               -- numéro du message Telegram
+    statut              TEXT,                  -- décision prise avec les boutons Telegram
+    candidature         TEXT,                  -- ex. « email envoyé le … »
+    envoye_le           TEXT                   -- date d'envoi du dossier (évite tout double envoi)
+);
+CREATE TABLE IF NOT EXISTS etat (              -- petites valeurs à retenir entre deux lancements
+    cle    TEXT PRIMARY KEY,
+    valeur TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_lien ON annonces(lien_normalise);
 """
+
+
+# Colonnes ajoutées après la première version (ajoutées automatiquement aux anciennes bases).
+NOUVELLES_COLONNES = {
+    "ville": "TEXT", "quartier": "TEXT", "colocation": "INTEGER DEFAULT 0", "photo": "TEXT",
+    "message_id": "INTEGER", "statut": "TEXT", "candidature": "TEXT", "envoye_le": "TEXT",
+}
+CHAMPS_MODIFIABLES = {"notifiee_le", "message_id", "statut", "candidature", "envoye_le", "brouillon"}
 
 
 def maintenant() -> str:
@@ -51,9 +69,9 @@ class Stockage:
         self.db.executescript(SCHEMA)
         # Mise à jour d'une base créée par une version précédente de l'outil.
         colonnes = {c[1] for c in self.db.execute("PRAGMA table_info(annonces)")}
-        for nom in ("ville", "quartier"):
+        for nom, type_ in NOUVELLES_COLONNES.items():
             if nom not in colonnes:
-                self.db.execute(f"ALTER TABLE annonces ADD COLUMN {nom} TEXT")
+                self.db.execute(f"ALTER TABLE annonces ADD COLUMN {nom} {type_}")
         self.db.commit()
 
     # ---- emails ---------------------------------------------------------
@@ -77,10 +95,10 @@ class Stockage:
         self.db.execute(
             """INSERT OR IGNORE INTO annonces
                (empreinte, lien, lien_normalise, source, prix_cc, charges_incertaines, surface,
-                ville, quartier, email_contact, telephone, retenue, raison, vue_le)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ville, quartier, colocation, photo, email_contact, telephone, retenue, raison, vue_le)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (a.empreinte(), a.lien, normaliser_lien(a.lien), a.source, a.prix_cc,
-             int(a.charges_incertaines), a.surface, a.ville, a.quartier, a.email_contact,
+             int(a.charges_incertaines), a.surface, a.ville, a.quartier, int(a.colocation), a.photo, a.email_contact,
              a.telephone, int(retenue), raison, maintenant()),
         )
         self.db.commit()
@@ -91,12 +109,25 @@ class Stockage:
             "SELECT * FROM annonces WHERE retenue=1 AND notifiee_le IS NULL ORDER BY id"
         ).fetchall()
 
-    def marquer_brouillon(self, id_: int, etat: str) -> None:
-        self.db.execute("UPDATE annonces SET brouillon=? WHERE id=?", (etat, id_))
+    def annonce(self, id_: int) -> Optional[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM annonces WHERE id=?", (id_,)).fetchone()
+
+    def maj(self, id_: int, **champs) -> None:
+        """Modifie des colonnes d'une annonce, ex. maj(3, statut="pas intéressé")."""
+        inconnus = set(champs) - CHAMPS_MODIFIABLES
+        if inconnus:
+            raise ValueError(f"Champs non modifiables : {inconnus}")
+        affectations = ", ".join(f"{c}=?" for c in champs)
+        self.db.execute(f"UPDATE annonces SET {affectations} WHERE id=?", (*champs.values(), id_))
         self.db.commit()
 
-    def marquer_notifiee(self, id_: int) -> None:
-        self.db.execute("UPDATE annonces SET notifiee_le=? WHERE id=?", (maintenant(), id_))
+    # ---- petites valeurs persistantes (ex. position de lecture Telegram) ----
+    def lire_etat(self, cle: str, defaut: str = "") -> str:
+        ligne = self.db.execute("SELECT valeur FROM etat WHERE cle=?", (cle,)).fetchone()
+        return ligne[0] if ligne else defaut
+
+    def ecrire_etat(self, cle: str, valeur) -> None:
+        self.db.execute("INSERT OR REPLACE INTO etat VALUES (?, ?)", (cle, str(valeur)))
         self.db.commit()
 
     def a_ecrire_dans_csv(self) -> List[sqlite3.Row]:

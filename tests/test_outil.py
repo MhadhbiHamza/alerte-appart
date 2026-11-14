@@ -163,19 +163,60 @@ class TestModele(unittest.TestCase):
         self.assertEqual(modele.remplir("{inconnue}", v), "{inconnue}")
 
 
-class TestCycleComplet(unittest.TestCase):
-    """Simule un cycle complet avec Gmail et Telegram remplacés par des faux."""
+HTML_COLOC = """
+<html><body>
+<div><a href="https://www.jinka.fr/c/coloc1"><img src="https://img.jinka.fr/logo.png" width="120"></a>
+<img src="https://img.jinka.fr/photos/coloc1.jpg" width="300" height="200">
+<a href="https://www.jinka.fr/c/coloc1">Chambre en colocation</a> 14 m² · 580 € CC · Montrouge (92120)</div>
+<div><a href="https://www.jinka.fr/c/coloc2">Colocation 4 personnes</a> 18 m² · 650 € CC · Paris 15e</div>
+</body></html>
+"""
 
-    def test_cycle(self):
-        tmp = Path(tempfile.mkdtemp())
-        pdf = tmp / "dossier.pdf"
-        pdf.write_bytes(b"%PDF-1.4 test")
-        cfg = Config("moi@gmail.com", "x", "INBOX", "tok", "42", 900,
-                     _zones(config.ZONES_PAR_DEFAUT, "ZONES"), {"Ivry-sur-Seine"},
-                     ["jinka", "seloger", "pap"], pdf, 120, 48, 2,
-                     Path(__file__).parent.parent / "templates.md", tmp / "suivi.csv", tmp / "a.db")
-        db = Stockage(cfg.fichier_db)
-        emails = [
+
+class TestColocationEtPhoto(unittest.TestCase):
+    def test_coloc(self):
+        a1, a2 = extraction.extraire_annonces(email_de("Jinka <alerte@jinka.fr>", HTML_COLOC))
+        self.assertTrue(a1.colocation and a2.colocation)
+        self.assertEqual(a1.photo, "https://img.jinka.fr/photos/coloc1.jpg")  # pas le logo
+        voulues = _zones(config.ZONES_PAR_DEFAUT, "ZONES")
+        self.assertEqual(extraction.est_eligible(a1, 900, voulues, 600), (True, "ok"))
+        self.assertEqual(extraction.est_eligible(a2, 900, voulues, 600)[1], "trop cher (650 € en colocation)")
+        # un appartement entier à 650 € reste accepté (plafond 900 €)
+        a2.colocation = False
+        self.assertTrue(extraction.est_eligible(a2, 900, voulues, 600)[0])
+
+    def test_coloc_par_objet_de_l_email(self):
+        msg = email_de("PAP <alerte@pap.fr>", texte="Paris 13e - 12 m²\n550 € CC\nhttps://www.pap.fr/annonces/r1")
+        msg.replace_header("Subject", "Votre alerte Colocation Paris")
+        self.assertTrue(extraction.extraire_annonces(msg)[0].colocation)
+
+    def test_modele_coloc(self):
+        chemin = Path(__file__).parent.parent / "templates.md"
+        objet, message = modele.charger(chemin, colocation=True)
+        self.assertIn("colocation", objet.lower())
+        self.assertIn("chambre en colocation", message)
+        self.assertNotIn("colocation", modele.charger(chemin)[0].lower())
+
+
+def clic(id_clic, data, chat=42, message_id=900):
+    return {"update_id": id_clic, "callback_query": {
+        "id": f"c{id_clic}", "data": data, "message": {"message_id": message_id, "chat": {"id": chat}}}}
+
+
+class TestCycleComplet(unittest.TestCase):
+    """Simule l'outil complet avec Gmail et Telegram remplacés par des faux."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.pdf = self.tmp / "dossier.pdf"
+        self.pdf.write_bytes(b"%PDF-1.4 test")
+        self.cfg = Config("moi@gmail.com", "x", "INBOX", "tok", "42", 900,
+                          _zones(config.ZONES_PAR_DEFAUT, "ZONES"), {"Ivry-sur-Seine"},
+                          ["jinka", "seloger", "pap"], self.pdf, 120, 48, 2,
+                          Path(__file__).parent.parent / "templates.md", self.tmp / "suivi.csv",
+                          self.tmp / "a.db", 600)
+        self.db = Stockage(self.cfg.fichier_db)
+        self.emails = [
             ("INBOX:1:1", email_de("Jinka <alerte@jinka.fr>", HTML_JINKA)),
             ("INBOX:1:2", email_de("SeLoger <alertes@mail.seloger.com>", HTML_SELOGER)),
             # même annonce que la 1re de Jinka, reçue via PAP : doit être ignorée (doublon)
@@ -185,49 +226,111 @@ class TestCycleComplet(unittest.TestCase):
             ("INBOX:1:4", email_de("PAP <alerte@pap.fr>",
                                    texte="Ivry-sur-Seine (94200) - 2 pièces 33 m², métro Mairie d'Ivry\n"
                                          "870 € CC\nhttps://www.pap.fr/annonces/r555")),
+            ("INBOX:1:5", email_de("Jinka <alerte@jinka.fr>", HTML_COLOC)),
         ]
+        self.clics = []
+        patchs = [
+            mock.patch.object(main.gmail, "connexion"),
+            mock.patch.object(main.gmail, "lire_emails", side_effect=self._faux_lire),
+            mock.patch.object(main.gmail, "creer_brouillon"),
+            mock.patch.object(main.gmail, "envoyer_email"),
+            mock.patch.object(main.telegram, "envoyer", side_effect=lambda *a, **k: 900 + len(self.envoyes())),
+            mock.patch.object(main.telegram, "mises_a_jour", side_effect=self._faux_clics),
+            mock.patch.object(main.telegram, "repondre_clic"),
+            mock.patch.object(main.telegram, "modifier_boutons"),
+        ]
+        self.m = {}
+        for pt in patchs:
+            self.m[pt.attribute] = pt.start()
+            self.addCleanup(pt.stop)
 
-        def faux_lire(imap, dossier, exp, jours, deja_traite=None):
-            return [(c, m) for c, m in emails if not (deja_traite and deja_traite(c))]
+    def _faux_lire(self, imap, dossier, exp, jours, deja_traite=None):
+        return [(c, m) for c, m in self.emails if not (deja_traite and deja_traite(c))]
 
-        with mock.patch.object(main.gmail, "connexion"), \
-             mock.patch.object(main.gmail, "lire_emails", side_effect=faux_lire), \
-             mock.patch.object(main.gmail, "creer_brouillon") as brouillon, \
-             mock.patch.object(main.telegram, "envoyer") as envoyer:
-            main.cycle(cfg, db)
-            # 3 annonces retenues : Jinka 11e 880 €, SeLoger 15e 820+60 €, PAP Ivry 870 €
-            # (SeLoger 17e : hors zone ; Jinka 14e : trop cher ; Jinka 20e : hors zone)
-            self.assertEqual(envoyer.call_count, 3)
-            ivry = envoyer.call_args_list[2][0][2]
-            self.assertIn("⭐", ivry)
-            self.assertIn("📍 Ivry-sur-Seine · 33 m² · <b>870 € CC</b>", ivry)
-            self.assertIn("Quartier repéré : Mairie d'Ivry", ivry)
-            self.assertIn("à Ivry-sur-Seine, proposé à 870 €", ivry)
-            self.assertNotIn("⭐", envoyer.call_args_list[0][0][2])
-            self.assertEqual(brouillon.call_count, 1)  # seule l'annonce SeLoger a un email d'agence
-            args = brouillon.call_args[0]
-            self.assertEqual(args[2], "contact@agence-dupont.fr")
-            self.assertEqual(args[5], pdf)
-            self.assertIn("<pre>", envoyer.call_args_list[0][0][2])
+    def _faux_clics(self, token, offset, attente):
+        return [c for c in self.clics if c["update_id"] >= offset]
 
-            # 2e cycle : rien de nouveau
-            main.cycle(cfg, db)
-            self.assertEqual(envoyer.call_count, 3)
+    def envoyes(self):
+        return self.m["envoyer"].call_args_list
 
-            lignes = suivi._lire(cfg.fichier_csv)
-            self.assertEqual(len(lignes), 3)
-            self.assertEqual(lignes[0]["statut"], "nouveau")
-            self.assertTrue(lignes[2]["annonce"].startswith("⭐ Ivry-sur-Seine"))
+    def test_parcours_complet(self):
+        main.boucle(self.cfg, self.db, une_fois=True)
+        # n° des annonces : rejetées comprises (SeLoger 15e = 4, Ivry = 6, coloc Montrouge = 7)
+        # 4 retenues : Jinka 11e 880 €, SeLoger 15e 820+60 €, PAP Ivry 870 €, coloc Montrouge 580 €
+        # (SeLoger 17e hors zone, Jinka 14e trop cher, Jinka 20e hors zone, coloc 15e à 650 € > 600 €)
+        self.assertEqual(len(self.envoyes()), 4)
+        textes = [c[0][2] for c in self.envoyes()]
+        ivry, coloc = textes[2], textes[3]
+        self.assertIn("⭐", ivry)
+        self.assertIn("📍 Ivry-sur-Seine · 33 m² · <b>870 € CC</b>", ivry)
+        self.assertIn("Quartier repéré : Mairie d'Ivry", ivry)
+        self.assertIn("à Ivry-sur-Seine, proposé à 870 €", ivry)
+        self.assertNotIn("⭐", textes[0])
+        self.assertIn("👥 Colocation", coloc)
+        self.assertIn("chambre en colocation à Montrouge", coloc)
+        # aperçu = photo de l'email si présente, sinon le lien de l'annonce
+        self.assertEqual(self.envoyes()[3][1]["apercu"], "https://img.jinka.fr/photos/coloc1.jpg")
+        self.assertEqual(self.envoyes()[0][1]["apercu"], "https://t.jinka.fr/c/abc111")
+        # boutons : Postuler/Brouillon/Pas intéressé si email d'agence, sinon « J'ai postulé »
+        seloger = self.envoyes()[1][1]["boutons"]
+        self.assertEqual([d for ligne in seloger for _, d in ligne], ["postuler:4", "brouillon:4", "refuser:4"])
+        self.assertEqual(self.envoyes()[0][1]["boutons"][0][0][1], "postuler:1")
+        self.m["envoyer_email"].assert_not_called()   # rien n'est envoyé sans appui
+        self.m["creer_brouillon"].assert_not_called()
 
-            # Relance 48 h plus tard : on vieillit les dates, et on clôt une candidature
-            db.db.execute("UPDATE annonces SET notifiee_le='2000-01-01T00:00:00'")
-            db.db.commit()
-            lignes[2]["statut"] = "Refusé"
-            suivi._ecrire(cfg.fichier_csv, lignes)
-            main.cycle(cfg, db)
-            self.assertEqual(envoyer.call_count, 5)  # 2 rappels, pas pour la candidature refusée
-            self.assertIn("relancer", envoyer.call_args[0][2])
-            self.assertEqual(suivi._lire(cfg.fichier_csv)[0]["statut"], "à relancer")
+        # Appuis : Postuler (SeLoger) deux fois, Pas intéressé (Jinka), un intrus, J'ai postulé (Ivry)
+        self.clics = [clic(1, "postuler:4"), clic(2, "postuler:4"), clic(3, "refuser:1"),
+                      clic(4, "postuler:6", chat=666), clic(5, "postuler:6")]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["envoyer_email"].assert_called_once()
+        args = self.m["envoyer_email"].call_args[0]
+        self.assertEqual(args[2], "contact@agence-dupont.fr")
+        self.assertEqual(args[5], self.pdf)
+        self.assertIn("880 € charges comprises", args[4])
+        reponses = [c[0][2] if len(c[0]) > 2 else "" for c in self.m["repondre_clic"].call_args_list]
+        self.assertIn("Dossier envoyé à contact@agence-dupont.fr ✅", reponses)
+        self.assertTrue(any(r.startswith("Dossier déjà envoyé") for r in reponses))
+        self.assertIn("Non autorisé.", reponses)
+        # les appuis déjà traités ne sont pas rejoués
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["envoyer_email"].assert_called_once()
+
+        lignes = {l["id"]: l for l in suivi._lire(self.cfg.fichier_csv)}
+        self.assertEqual(lignes["4"]["statut"], "dossier envoyé")
+        self.assertTrue(lignes["4"]["candidature"].startswith("email envoyé le"))
+        self.assertEqual(lignes["1"]["statut"], "pas intéressé")
+        self.assertEqual(lignes["6"]["statut"], "postulé")
+        self.assertEqual(lignes["7"]["statut"], "nouveau")
+        self.assertTrue(lignes["6"]["annonce"].startswith("⭐ Ivry-sur-Seine"))
+        self.assertTrue(lignes["7"]["annonce"].startswith("Coloc – Montrouge"))
+
+        # 2e passage : rien de nouveau
+        main.boucle(self.cfg, self.db, une_fois=True)
+        self.assertEqual(len(self.envoyes()), 4)
+
+        # 48 h plus tard : rappels sauf pour « pas intéressé » ; boutons remis si pas de décision
+        self.db.db.execute("UPDATE annonces SET notifiee_le='2000-01-01T00:00:00'")
+        self.db.db.commit()
+        main.boucle(self.cfg, self.db, une_fois=True)
+        rappels = self.envoyes()[4:]
+        self.assertEqual(len(rappels), 3)
+        self.assertIn("relancez l'agence", rappels[0][0][2])
+        self.assertIsNone(rappels[0][1]["boutons"])
+        self.assertIn("pas encore répondu", rappels[2][0][2])
+        self.assertEqual(rappels[2][1]["boutons"][0][0][1], "postuler:7")
+
+    def test_brouillon_et_pdf_manquant(self):
+        main.boucle(self.cfg, self.db, une_fois=True)
+        self.pdf.unlink()
+        self.clics = [clic(1, "postuler:4")]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["envoyer_email"].assert_not_called()
+        self.assertIn("Dossier PDF introuvable", self.m["repondre_clic"].call_args[0][2])
+        self.clics = [clic(2, "brouillon:4")]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["creer_brouillon"].assert_called_once()
+        self.assertEqual(self.m["creer_brouillon"].call_args[0][2], "contact@agence-dupont.fr")
+        self.assertEqual(self.db.annonce(4)["statut"], "brouillon créé")
 
 
 class TestGmail(unittest.TestCase):

@@ -1,12 +1,13 @@
-"""Accès à Gmail par IMAP (lecture des alertes + création de brouillons).
+"""Accès à Gmail : lecture des alertes (IMAP), brouillons (IMAP) et envoi (SMTP).
 
-Important : ce module n'utilise PAS SMTP. Il ne peut donc techniquement
-envoyer aucun email : il dépose seulement des brouillons dans votre dossier
-« Brouillons », que vous relisez et envoyez vous-même depuis Gmail.
+Important : envoyer_email() n'est appelée QUE lorsque vous appuyez sur
+« ✅ Postuler » sous une annonce dans Telegram. L'outil n'envoie jamais rien
+de lui-même. L'email envoyé apparaît dans « Messages envoyés » de Gmail.
 """
 import email
 import imaplib
 import re
+import smtplib
 import time
 from datetime import date, timedelta
 from email import policy
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Callable, Iterator, Optional, Tuple
 
 SERVEUR_IMAP = "imap.gmail.com"
+SERVEUR_SMTP = "smtp.gmail.com"
 # Noms des mois en anglais imposés par IMAP (indépendant de la langue de l'ordinateur).
 MOIS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -90,15 +92,9 @@ def dossier_brouillons(imap: imaplib.IMAP4_SSL) -> str:
     return '"[Gmail]/Drafts"'
 
 
-def creer_brouillon(
-    imap: imaplib.IMAP4_SSL,
-    expediteur: str,
-    destinataire: str,
-    objet: str,
-    corps: str,
-    piece_jointe: Optional[Path],
-) -> None:
-    """Dépose un brouillon (avec le PDF en pièce jointe) dans Gmail. N'envoie rien."""
+def construire_email(expediteur: str, destinataire: str, objet: str, corps: str,
+                     piece_jointe: Optional[Path]) -> EmailMessage:
+    """Prépare l'email de candidature, avec le dossier PDF en pièce jointe."""
     msg = EmailMessage()
     msg["From"] = expediteur
     msg["To"] = destinataire
@@ -114,8 +110,29 @@ def creer_brouillon(
             subtype="pdf",
             filename=piece_jointe.name,
         )
+    return msg
 
+
+def creer_brouillon(imap: imaplib.IMAP4_SSL, expediteur: str, destinataire: str, objet: str,
+                    corps: str, piece_jointe: Optional[Path]) -> None:
+    """Dépose un brouillon (avec le PDF en pièce jointe) dans Gmail. N'envoie rien."""
+    msg = construire_email(expediteur, destinataire, objet, corps, piece_jointe)
     dossier = _guillemets(dossier_brouillons(imap))
     typ, reponse = imap.append(dossier, "(\\Draft)", imaplib.Time2Internaldate(time.time()), msg.as_bytes())
     if typ != "OK":
         raise RuntimeError(f"Création du brouillon refusée : {reponse}")
+
+
+def envoyer_email(adresse: str, mot_de_passe: str, destinataire: str, objet: str,
+                  corps: str, piece_jointe: Path) -> None:
+    """Envoie la candidature (appelée uniquement après un appui sur « ✅ Postuler »)."""
+    msg = construire_email(adresse, destinataire, objet, corps, piece_jointe)
+    with smtplib.SMTP_SSL(SERVEUR_SMTP, 465, timeout=30) as smtp:
+        smtp.login(adresse, mot_de_passe)
+        smtp.send_message(msg)
+
+
+def tester_envoi(adresse: str, mot_de_passe: str) -> None:
+    """Vérifie que la connexion d'envoi fonctionne, sans rien envoyer."""
+    with smtplib.SMTP_SSL(SERVEUR_SMTP, 465, timeout=30) as smtp:
+        smtp.login(adresse, mot_de_passe)

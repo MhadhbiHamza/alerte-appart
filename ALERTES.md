@@ -33,6 +33,20 @@ doublons entre sites, priorités ⭐.
 - Clichy (92110) : ⚠️ choisissez bien **Clichy 92110**, pas Clichy-sous-Bois (93)
 - Boulogne-Billancourt (92100), Issy-les-Moulineaux (92130)
 
+## Alertes colocation (600 € max)
+
+Pour la colocation, créez **en plus** une alerte par site avec les mêmes villes (ou seulement vos priorités
+pour commencer) et un **loyer max de 600 €** :
+
+- **Jinka** : dans l'alerte, cochez le type **Colocation** s'il est proposé ; sinon créez une alerte
+  « appartement » à 600 € max, l'outil reconnaît les colocations au mot « colocation » dans l'annonce.
+- **SeLoger** : dans **Louer**, choisissez le type **Colocation** s'il apparaît dans la liste des biens ;
+  sinon, faites une recherche « chambre » ou « colocation » à 600 € max.
+- **PAP** : choisissez **Colocation** dans le type de bien (rubrique Location), loyer max 600 €.
+
+Nommez ces alertes avec le mot **« Colocation »** quand le site permet de leur donner un nom : si ce mot
+apparaît dans l'objet de l'email d'alerte, toutes ses annonces sont traitées comme des colocations.
+
 > Les quartiers (Alésia, Maison-Blanche, Bécon…) ne se règlent pas dans les alertes : les sites filtrent
 > par ville ou arrondissement. L'outil affiche le quartier dans la notification quand l'annonce le mentionne.
 

@@ -11,6 +11,8 @@ Variables disponibles (remplacées automatiquement) :
   {source}          Jinka, SeLoger ou PAP
   {contact}         email ou téléphone de l'annonceur s'il est connu
 Gardez bien les deux titres « ## Objet » et « ## Message ».
+Pour les colocations, ce sont « ## Objet colocation » et « ## Message colocation » (en bas)
+qui sont utilisés ; si vous les supprimez, le message normal sert pour tout.
 -->
 
 ## Objet
@@ -24,6 +26,24 @@ Bonjour,
 Je suis très intéressé par votre appartement de {surface} m² à {ville}, proposé à {prix} € charges comprises ({lien}).
 
 Professionnel en CDI dans le secteur de l'intelligence artificielle à Paris, je bénéficie d'une rémunération annuelle brute de 42 000 €. Sérieux, organisé et soigneux, je recherche un logement que je souhaite occuper durablement en tant que résidence principale. Je dispose d'un dossier locatif complet, d'une situation professionnelle stable et d'un garant personnel, et reste disponible rapidement pour toute visite ou démarche complémentaire. Je suis un locataire respectueux, attentif à l'entretien du logement et particulièrement soucieux de respecter mes engagements.
+
+Je peux vous transmettre mon dossier (pièce d'identité, contrat de travail, 3 derniers bulletins de salaire, dernier avis d'imposition, justificatifs du garant) dès aujourd'hui.
+
+Bien cordialement,
+[Prénom Nom]
+[Téléphone]
+
+## Objet colocation
+
+Candidature – Chambre en colocation {ville} – {prix} € CC
+
+## Message colocation
+
+Bonjour,
+
+Je suis très intéressé par la chambre en colocation à {ville}, proposée à {prix} € charges comprises ({lien}).
+
+Professionnel en CDI dans le secteur de l'intelligence artificielle à Paris, je bénéficie d'une rémunération annuelle brute de 42 000 €. Sérieux, organisé et soigneux, je recherche un logement que je souhaite occuper durablement en tant que résidence principale. Je dispose d'un dossier locatif complet, d'une situation professionnelle stable et d'un garant personnel, et reste disponible rapidement pour une visite ou un premier échange avec les colocataires. Respectueux des espaces partagés et attentif à l'entretien du logement, je suis particulièrement soucieux de respecter mes engagements.
 
 Je peux vous transmettre mon dossier (pièce d'identité, contrat de travail, 3 derniers bulletins de salaire, dernier avis d'imposition, justificatifs du garant) dès aujourd'hui.
 

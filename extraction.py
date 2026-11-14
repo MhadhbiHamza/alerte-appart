@@ -58,6 +58,12 @@ DOMAINES_IGNORES = ("jinka", "seloger", "pap.fr", "pap.com", "google", "bienici"
 PREFIXES_IGNORES = ("noreply", "no-reply", "no_reply", "nepasrepondre", "ne-pas-repondre",
                     "ne_pas_repondre", "newsletter", "notification", "alerte", "alert")
 
+# Colocation : « colocation », « coloc », « chambre en colocation », « colocataire ».
+COLOC_RE = re.compile(r"\bcoloc(?:ation|ataires?|s)?\b", re.I)
+# Images qui ne sont pas des photos d'annonce (logos, pictos, pixels de suivi…).
+PHOTO_IGNORE_RE = re.compile(r"logo|icon|picto|pixel|track|spacer|badge|blank|apple|google|facebook|"
+                             r"instagram|twitter|linkedin|youtube|tiktok|\.gif(?:\?|$)", re.I)
+
 # Liens qui ne sont pas des annonces (désinscription, réseaux sociaux…).
 LIEN_IGNORE_RE = re.compile(
     r"unsubscribe|desinscri|désinscri|desabonn|désabonn|apps\.apple\.com|play\.google\.com|"
@@ -87,6 +93,8 @@ class Annonce:
     surface: Optional[float] = None
     ville: Optional[str] = None      # « Paris 13e », « Ivry-sur-Seine »…
     quartier: Optional[str] = None   # quartier de votre liste, s'il est cité
+    colocation: bool = False
+    photo: Optional[str] = None      # adresse de la photo présente dans l'email d'alerte
     email_contact: Optional[str] = None
     telephone: Optional[str] = None
 
@@ -194,8 +202,21 @@ def _nb_annonces(texte: str) -> int:
     return n if n else len(PRIX_RE.findall(texte))
 
 
-def _blocs_html(html: str) -> Iterator[Tuple[str, str]]:
-    """Renvoie (texte du bloc, lien de l'annonce) pour chaque carte d'annonce."""
+def _photo(bloc) -> Optional[str]:
+    """Première vraie photo de la carte d'annonce (déjà présente dans l'email)."""
+    for img in bloc.find_all("img", src=True):
+        src = img["src"].strip()
+        if not src.lower().startswith("http") or PHOTO_IGNORE_RE.search(src):
+            continue
+        largeur, hauteur = str(img.get("width", "")), str(img.get("height", ""))
+        if (largeur.isdigit() and int(largeur) < 80) or (hauteur.isdigit() and int(hauteur) < 60):
+            continue
+        return src
+    return None
+
+
+def _blocs_html(html: str) -> Iterator[Tuple[str, str, Optional[str]]]:
+    """Renvoie (texte du bloc, lien de l'annonce, photo) pour chaque carte d'annonce."""
     soup = BeautifulSoup(html, "html.parser")
     for balise in soup(["script", "style", "head"]):
         balise.decompose()
@@ -237,10 +258,10 @@ def _blocs_html(html: str) -> Iterator[Tuple[str, str]]:
             a["href"].split(":", 1)[1].split("?")[0]
             for a in bloc.find_all("a", href=re.compile(r"^(mailto|tel):", re.I))
         )
-        yield texte(bloc) + " " + contacts, liens[0][2]
+        yield texte(bloc) + " " + contacts, liens[0][2], _photo(bloc)
 
 
-def _blocs_texte(texte: str) -> Iterator[Tuple[str, str]]:
+def _blocs_texte(texte: str) -> Iterator[Tuple[str, str, Optional[str]]]:
     """Version de secours pour les emails sans HTML : un paragraphe = une annonce."""
     paragraphes = re.split(r"\n\s*\n", normaliser(texte))
     for i, p in enumerate(paragraphes):
@@ -249,7 +270,7 @@ def _blocs_texte(texte: str) -> Iterator[Tuple[str, str]]:
         urls = URL_RE.findall(p) or (URL_RE.findall(paragraphes[i + 1]) if i + 1 < len(paragraphes) else [])
         urls = [u for u in urls if not LIEN_IGNORE_RE.search(u)]
         if urls:
-            yield p, urls[0]
+            yield p, urls[0], None
 
 
 def corps_email(msg: EmailMessage) -> Tuple[Optional[str], Optional[str]]:
@@ -275,6 +296,8 @@ def corps_email(msg: EmailMessage) -> Tuple[Optional[str], Optional[str]]:
 def extraire_annonces(msg: EmailMessage, a_exclure=()) -> List[Annonce]:
     """Point d'entrée : transforme un email en liste d'annonces."""
     source = detecter_source(msg.get("From", ""))
+    # Une alerte intitulée « Colocation … » ne contient que des colocations.
+    alerte_coloc = bool(COLOC_RE.search(str(msg.get("Subject", ""))))
     html, texte = corps_email(msg)
 
     blocs = list(_blocs_html(html)) if html else []
@@ -282,7 +305,7 @@ def extraire_annonces(msg: EmailMessage, a_exclure=()) -> List[Annonce]:
         blocs = list(_blocs_texte(texte))
 
     annonces, liens_vus = [], set()
-    for bloc, lien in blocs:
+    for bloc, lien, photo in blocs:
         if BLOC_IGNORE_RE.search(bloc) or lien in liens_vus:
             continue
         liens_vus.add(lien)
@@ -297,20 +320,28 @@ def extraire_annonces(msg: EmailMessage, a_exclure=()) -> List[Annonce]:
             surface=extraire_surface(bloc),
             ville=ville,
             quartier=zones.detecter_quartier(bloc, ville),
+            colocation=alerte_coloc or bool(COLOC_RE.search(bloc)),
+            photo=photo,
             email_contact=extraire_email(bloc, a_exclure),
             telephone=extraire_telephone(bloc),
         ))
     return annonces
 
 
-def est_eligible(a: Annonce, prix_max: int, zones_voulues: set) -> Tuple[bool, str]:
-    """Applique vos critères. Renvoie (gardée ?, raison)."""
+def est_eligible(a: Annonce, prix_max: int, zones_voulues: set,
+                 prix_max_coloc: Optional[int] = None) -> Tuple[bool, str]:
+    """Applique vos critères. Renvoie (gardée ?, raison).
+
+    Les colocations ont leur propre prix maximum (PRIX_MAX_COLOC).
+    """
+    if a.colocation and prix_max_coloc is not None:
+        prix_max = prix_max_coloc
     if a.prix_cc is None:
         return False, "prix introuvable"
     if a.ville is None:
         return False, "ville introuvable"
     if a.prix_cc > prix_max:
-        return False, f"trop cher ({a.prix_cc} €)"
+        return False, f"trop cher ({a.prix_cc} €{' en colocation' if a.colocation else ''})"
     if a.ville not in zones_voulues:
         return False, f"hors zone ({a.ville})"
     return True, "ok"

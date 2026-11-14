@@ -3,8 +3,9 @@
 Séparateur « ; » et encodage UTF-8 avec BOM : Excel en français l'ouvre
 directement avec les bonnes colonnes et les accents.
 
-Vous pouvez modifier vous-même la colonne « statut » (ex. : contacté,
-visite prévue, refusé…). Si le statut vaut refusé / abandonné / loué / ignoré
+Le statut se met à jour tout seul quand vous appuyez sur les boutons Telegram
+(dossier envoyé, pas intéressé…). Vous pouvez aussi le modifier vous-même
+(ex. : visite prévue, refusé…). Si le statut vaut refusé / abandonné / loué / ignoré
 / dossier accepté, l'outil ne vous enverra pas de rappel de relance.
 
 ⚠️ Sous Windows, Excel verrouille le fichier tant qu'il est ouvert : l'outil
@@ -15,7 +16,7 @@ import unicodedata
 from pathlib import Path
 from typing import Dict, List
 
-COLONNES = ["id", "date", "source", "annonce", "lien", "contact", "brouillon_gmail", "statut", "relance_le"]
+COLONNES = ["id", "date", "source", "annonce", "lien", "contact", "candidature", "statut", "relance_le"]
 STATUTS_TERMINES = {"refuse", "abandonne", "loue", "ignore", "dossier accepte", "pas interesse"}
 
 
@@ -56,6 +57,15 @@ def statut(chemin: Path, id_: int) -> str:
 
 def est_termine(statut_: str) -> bool:
     return _sans_accents(statut_) in STATUTS_TERMINES
+
+
+def maj(chemin: Path, id_: int, **champs: str) -> None:
+    """Modifie des colonnes d'une ligne (ex. statut=..., candidature=...)."""
+    lignes = _lire(chemin)
+    for l in lignes:
+        if l.get("id") == str(id_):
+            l.update({k: str(v) for k, v in champs.items()})
+    _ecrire(chemin, lignes)
 
 
 def noter_relance(chemin: Path, id_: int, date_: str) -> None:

@@ -10,10 +10,12 @@ from typing import Dict, Tuple
 OBJET_PAR_DEFAUT = "Candidature pour l'appartement {surface} m² – {ville}"
 
 
-def charger(chemin: Path) -> Tuple[str, str]:
+def charger(chemin: Path, colocation: bool = False) -> Tuple[str, str]:
     """Lit templates.md et renvoie (objet, message).
 
     Format attendu : une section « ## Objet » puis une section « ## Message ».
+    Pour une colocation, les sections « ## Objet colocation » et
+    « ## Message colocation » sont utilisées si elles existent.
     Les commentaires <!-- ... --> sont ignorés.
     """
     texte = chemin.read_text(encoding="utf-8")
@@ -26,8 +28,13 @@ def charger(chemin: Path) -> Tuple[str, str]:
             sections[courante] = []
         elif courante:
             sections[courante].append(ligne)
-    objet = "\n".join(sections.get("objet", [])).strip() or OBJET_PAR_DEFAUT
-    message = "\n".join(sections.get("message", [])).strip()
+    def section(nom: str) -> str:
+        if colocation and sections.get(nom + " colocation"):
+            nom += " colocation"
+        return "\n".join(sections.get(nom, [])).strip()
+
+    objet = section("objet") or OBJET_PAR_DEFAUT
+    message = section("message")
     if not message:
         raise ValueError(f"Section « ## Message » introuvable ou vide dans {chemin}")
     return objet, message

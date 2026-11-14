@@ -4,16 +4,39 @@ Petit outil Python qui tourne sur votre ordinateur et, **toutes les 2 minutes** 
 
 1. lit les nouveaux emails d'alerte **Jinka, SeLoger et PAP** arrivés dans une boîte Gmail dédiée (IMAP) ;
 2. extrait de chaque annonce : prix charges comprises, surface, ville ou arrondissement, lien, et email ou téléphone s'il y en a un ;
-3. ne garde que les annonces **≤ 900 € CC** dans **vos zones** (5 arrondissements et 15 communes de proche banlieue, réglables dans `.env`), signale par ⭐ vos **zones prioritaires**, et ignore les doublons ;
+3. ne garde que les annonces **≤ 900 € CC** (et les **colocations ≤ 600 € CC**) dans **vos zones** (5 arrondissements et 15 communes de proche banlieue, réglables dans `.env`), signale par ⭐ vos **zones prioritaires**, et ignore les doublons ;
 4. remplit votre modèle de candidature (`templates.md`) ;
-5. vous envoie une **notification Telegram** avec l'annonce, son lien et le message prêt à copier ;
-6. si l'annonce donne l'email de l'agence, crée un **brouillon Gmail** avec votre dossier PDF en pièce jointe ;
+5. vous envoie une **notification Telegram** avec l'aperçu de l'annonce (photo de l'alerte), son lien,
+   le message prêt à copier et des **boutons** pour répondre ;
+6. quand vous appuyez sur **✅ Postuler**, envoie l'email de candidature avec votre dossier PDF à l'agence
+   (ou, au choix, prépare un **brouillon Gmail** pour le relire d'abord) ;
 7. tient un fichier de suivi `suivi.csv` et vous **rappelle sur Telegram de relancer au bout de 48 h**.
 
 **Garanties :**
 - **Aucun scraping.** L'outil ne visite aucun site, il lit seulement vos emails.
-- **Aucun envoi automatique.** Le code n'utilise pas SMTP et ne peut donc envoyer aucun email.
-  Il ne fait que déposer des **brouillons**, que vous relisez puis envoyez vous-même depuis Gmail.
+- **Aucun envoi sans votre accord.** Un email ne part que lorsque **vous** appuyez sur « ✅ Postuler »
+  sous une annonce, et jamais deux fois pour la même annonce. Les emails envoyés apparaissent dans
+  « Messages envoyés » de la boîte dédiée.
+
+### Les boutons Telegram
+
+| Bouton | Ce qu'il fait |
+|---|---|
+| **✅ Postuler (envoyer le dossier)** | Envoie **immédiatement** le message de `templates.md` + `dossier.pdf` à l'email de l'annonce. Statut : `dossier envoyé`. Si le PDF est introuvable, rien n'est envoyé. |
+| **📝 Brouillon Gmail** | Crée le même email dans vos **Brouillons** Gmail, pour le relire ou le modifier avant de l'envoyer vous-même. Statut : `brouillon créé`. |
+| **✅ J'ai postulé sur le site** | (annonces sans email) Note que vous avez postulé via le site. Statut : `postulé`. |
+| **❌ Pas intéressé** | Classe l'annonce : plus de rappel de relance. Statut : `pas intéressé`. |
+
+Après un appui, les boutons sont remplacés par la décision (ex. « ✅ Dossier envoyé le 14/11 à 10:32 »).
+Seuls les appuis venant de **votre** compte Telegram (`TELEGRAM_CHAT_ID`) sont pris en compte.
+Les boutons réagissent en quelques secondes tant que `python main.py` tourne.
+
+**Aperçu de l'offre.** La notification affiche en grand la photo trouvée dans l'email d'alerte (ou, à défaut,
+l'aperçu de la page de l'annonce généré par Telegram). L'outil lui-même ne visite aucun site.
+
+**Colocation.** Une annonce est considérée comme une colocation si son texte (ou l'objet de l'email d'alerte)
+contient « colocation », « coloc » ou « colocataire ». Elle est alors acceptée jusqu'à `PRIX_MAX_COLOC` (600 €),
+dans les mêmes zones, et le message utilisé est celui de la section « Message colocation » de `templates.md`.
 
 ---
 
@@ -143,7 +166,7 @@ Google n'autorise pas un programme à utiliser votre mot de passe habituel. Il f
    | `TELEGRAM_CHAT_ID` | `123456789` | étape 4 |
 
 3. Les autres réglages ont déjà les bonnes valeurs, modifiables si besoin :
-   `PRIX_MAX_CC=900`, `ZONES=…` (vos 20 zones), `PRIORITES=…` (vos 5 priorités, marquées ⭐),
+   `PRIX_MAX_CC=900`, `PRIX_MAX_COLOC=600`, `ZONES=…` (vos 20 zones), `PRIORITES=…` (vos 5 priorités, marquées ⭐),
    `RELANCE_HEURES=48`, `INTERVALLE_SECONDES=120`, `DOSSIER_PDF=dossier.pdf`, `DOSSIER_IMAP=INBOX`.
 
    Dans `ZONES` et `PRIORITES`, écrivez `Paris 13e` pour un arrondissement, ou le nom d'une commune
@@ -200,11 +223,14 @@ Le fichier `.env` contient vos secrets : ne l'envoyez à personne et ne le publi
 
 `suivi.csv` (ouvrable avec Excel, LibreOffice ou Numbers) contient une ligne par annonce notifiée :
 
-| id | date | source | annonce | lien | contact | brouillon_gmail | statut | relance_le |
+| id | date | source | annonce | lien | contact | candidature | statut | relance_le |
 |---|---|---|---|---|---|---|---|---|
 
-- Mettez à jour la colonne **statut** au fil de l'eau : `contacté`, `visite prévue`, `dossier envoyé`…
-- **48 h** après la notification, vous recevez un rappel Telegram « Pensez à relancer ».
+- La colonne **statut** se remplit toute seule quand vous utilisez les boutons Telegram
+  (`dossier envoyé`, `brouillon créé`, `postulé`, `pas intéressé`). Vous pouvez aussi la modifier vous-même :
+  `visite prévue`, `refusé`…
+- **48 h** après la notification, vous recevez un rappel Telegram (« relancez l'agence » si le dossier
+  est parti, ou les boutons de nouveau si vous n'avez pas encore répondu).
   Il n'est **pas** envoyé si le statut est `refusé`, `abandonné`, `loué`, `ignoré`, `pas intéressé` ou `dossier accepté`.
 - Le statut `nouveau` passe automatiquement à `à relancer` lors du rappel.
 
@@ -231,8 +257,8 @@ Si elle indique « HC » sans montant, l'annonce est gardée (si le loyer HC ≤
 vérifiez le total vous-même. Si rien n'est indiqué, le prix est considéré comme charges comprises.
 
 **Contacts.** Les emails d'alerte contiennent rarement l'email ou le téléphone de l'annonceur
-(il faut souvent passer par le site). Dans ce cas, pas de brouillon : copiez le message reçu sur Telegram
-dans le formulaire de contact de l'annonce.
+(il faut souvent passer par le site). Dans ce cas, pas d'envoi possible : copiez le message reçu sur Telegram
+dans le formulaire de contact de l'annonce, puis appuyez sur « ✅ J'ai postulé sur le site ».
 
 **Doublons.** Une annonce est considérée comme déjà vue si son lien est identique, ou si elle a la même
 ville, le même prix et la même surface (la même annonce reçue via Jinka et SeLoger n'est notifiée qu'une fois).
@@ -247,7 +273,9 @@ Pour repartir de zéro, arrêtez l'outil et supprimez `annonces.db`.
 | Telegram : `chat not found` | Vous n'avez pas encore écrit à votre bot (étape 4.7), ou le chat ID est faux. |
 | Telegram : `Unauthorized` | Token erroné : recopiez-le depuis @BotFather (`/mybots` → votre bot → *API Token*). |
 | Aucune annonce trouvée | Lancez `--analyser`. Vérifiez que les alertes sont dans la boîte de réception et que l'adresse de l'expéditeur contient bien `jinka`, `seloger` ou `pap` (sinon ajoutez le mot dans `EXPEDITEURS`). |
-| Brouillon créé « sans PDF » | Vérifiez le chemin `DOSSIER_PDF`. |
+| « Dossier PDF introuvable » en appuyant sur Postuler | Vérifiez le chemin `DOSSIER_PDF` dans `.env`. |
+| Les boutons ne réagissent pas | `python main.py` doit être en train de tourner sur votre ordinateur. |
+| Erreur `SMTPAuthenticationError` | Même cause que l'erreur IMAP : mot de passe d'application erroné. |
 
 **Tests automatiques** (sans connexion internet) : `python -m unittest discover tests`
 
@@ -259,10 +287,10 @@ Pour repartir de zéro, arrêtez l'outil et supprimez `annonces.db`.
 |---|---|
 | `main.py` | programme principal : boucle toutes les 2 min et enchaîne les étapes |
 | `config.py` | lecture du fichier `.env` |
-| `gmail.py` | lecture des alertes et création des brouillons (IMAP uniquement, aucun envoi) |
+| `gmail.py` | lecture des alertes (IMAP), brouillons, envoi des candidatures après « Postuler » (SMTP) |
 | `extraction.py` | découpage des emails en annonces, extraction prix/surface/contact, filtre |
 | `zones.py` | vos communes et arrondissements : reconnaissance de la ville et des quartiers |
 | `stockage.py` | base SQLite `annonces.db` (doublons, état des notifications et relances) |
 | `modele.py` | remplissage de `templates.md` |
-| `telegram.py` | envoi des messages Telegram |
+| `telegram.py` | messages Telegram, boutons et lecture de vos appuis |
 | `suivi.py` | fichier `suivi.csv` |
