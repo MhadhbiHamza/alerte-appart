@@ -362,8 +362,17 @@ def commande_test(cfg: Config) -> None:
     imap.logout()
     gmail.tester_envoi(cfg.gmail_adresse, cfg.gmail_mot_de_passe)
     print("✅ Envoi Gmail possible (rien n'a été envoyé).")
-    telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, "✅ Test réussi : le bot fonctionne.")
-    print("✅ Message Telegram envoyé : vérifiez votre téléphone.")
+    try:
+        telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, "✅ Test réussi : le bot fonctionne.")
+        print("✅ Message Telegram envoyé : vérifiez votre téléphone.")
+    except telegram.TelegramInjoignable as exc:
+        print(f"❌ {exc}\n"
+              "   Gmail fonctionne, donc Internet marche : c'est l'accès à Telegram qui est bloqué.\n"
+              "   Causes habituelles : VPN actif, réseau d'entreprise / d'école / public qui bloque Telegram,\n"
+              "   antivirus ou pare-feu. Essayez sans VPN, ou via le partage de connexion de votre téléphone.\n"
+              "   Test rapide : ouvrez https://api.telegram.org dans votre navigateur.")
+    except RuntimeError as exc:  # Telegram a répondu, mais refuse (token ou chat ID faux)
+        print(f"❌ {exc}\n   Vérifiez TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID dans .env (voir README, étape 4).")
     modele.charger(cfg.fichier_modele)
     modele.charger(cfg.fichier_modele, colocation=True)
     print("✅ Modèle", cfg.fichier_modele.name, "lisible.")
