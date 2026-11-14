@@ -20,15 +20,37 @@ class TelegramInjoignable(ConnectionError):
     """Pas de connexion vers Telegram (Internet coupé, Wi-Fi, VPN, pare-feu…)."""
 
 
-def _appel(token: str, methode: str, donnees: dict, timeout: int = 20):
+class ConflitTelegram(RuntimeError):
+    """Deux exemplaires de l'outil (ex. PC + serveur) lisent les boutons du même bot."""
+
+
+# Une seule connexion réutilisée (keep-alive) : beaucoup moins de trafic qu'une connexion par appel,
+# important sur un serveur gratuit où le trafic sortant est compté.
+_session = requests.Session()
+
+
+def _appel(token: str, methode: str, donnees: dict, timeout: int = 20, fichiers: Optional[dict] = None):
     try:
-        r = requests.post(API.format(token=token, methode=methode), json=donnees, timeout=timeout)
+        url = API.format(token=token, methode=methode)
+        if fichiers:  # envoi de fichier : formulaire multipart
+            r = _session.post(url, data=donnees, files=fichiers, timeout=timeout)
+        else:
+            r = _session.post(url, json=donnees, timeout=timeout)
     except requests.RequestException as exc:
         # On ne remonte PAS l'erreur d'origine : elle contient l'adresse complète, donc le token.
         raise TelegramInjoignable(f"Telegram injoignable ({type(exc).__name__})") from None
+    if r.status_code == 409:
+        raise ConflitTelegram("un autre exemplaire de l'outil tourne déjà avec ce bot (sur votre PC ?)")
     if not r.ok:
         raise RuntimeError(f"Telegram ({methode}) a refusé : {r.status_code} {r.text}")
     return r.json().get("result")
+
+
+def envoyer_fichier(token: str, chat_id: str, chemin, legende: str = "") -> None:
+    """Envoie un fichier (ex. suivi.csv) dans la conversation."""
+    with open(chemin, "rb") as f:
+        _appel(token, "sendDocument", {"chat_id": chat_id, "caption": legende[:1024]},
+               timeout=60, fichiers={"document": (chemin.name, f)})
 
 
 def _bouton(texte: str, donnee: str) -> dict:

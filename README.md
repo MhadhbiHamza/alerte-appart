@@ -61,6 +61,7 @@ Tapez-les dans la conversation avec votre bot (elles apparaissent aussi dans le 
 | `/reprise` | Reprend la lecture, y compris les alertes reçues pendant la pause. |
 | `/stats` | Annonces vues, gardées, 🟢/🟡/🔴, dossiers envoyés : 7 derniers jours et au total. |
 | `/suivi` | Vos candidatures en cours (dossier envoyé, postulé, brouillon). |
+| `/csv` | Vous envoie le fichier `suivi.csv` (pratique quand l'outil tourne sur un serveur). |
 | `/aide` | Rappel des commandes et des boutons. |
 
 ### Les messages programmés
@@ -115,6 +116,9 @@ contient « colocation », « coloc » ou « colocataire ». Elle est alors acce
 dans les mêmes zones, et le message utilisé est celui de la section « Message colocation » de `templates.md`.
 
 ---
+
+> 🖥️ **Le faire tourner 24 h/24 sans votre PC, gratuitement** : suivez [DEPLOIEMENT.md](DEPLOIEMENT.md)
+> (serveur Oracle Cloud « Always Free », installation en une commande).
 
 ## Sommaire
 
@@ -394,6 +398,7 @@ Pour repartir de zéro, arrêtez l'outil et supprimez `annonces.db`.
 | `main.py` | programme principal : boucle, lecture des emails, suivi CSV, relances, ligne de commande |
 | `bot.py` | Telegram : cartes d'annonces, boutons, réponses, commandes /pause /stats… |
 | `resumes.py` | bilan du matin, résumé du soir, /stats et /suivi |
+| `deploiement/` | installation et mise à jour sur un serveur Linux (voir DEPLOIEMENT.md) |
 | `demarrer.bat` | lancement sous Windows (double-clic ou démarrage automatique) |
 | `config.py` | lecture du fichier `.env` |
 | `gmail.py` | lecture des alertes (IMAP), brouillons, envoi des candidatures après « Postuler » (SMTP) |

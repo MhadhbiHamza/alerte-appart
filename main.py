@@ -227,6 +227,11 @@ def _boucle(cfg: Config, db: Stockage, une_fois: bool, prochain_cycle: float, re
             reseau.erreur(exc)
             if not une_fois:
                 time.sleep(10)
+        except telegram.ConflitTelegram as exc:
+            # Deux exemplaires lisent le même bot : chacun ne reçoit qu'une partie des appuis.
+            log.error("⚠️  %s : arrêtez l'autre exemplaire. Nouvel essai dans 60 s.", exc)
+            if not une_fois:
+                time.sleep(60)
         except Exception:
             log.exception("Erreur de lecture des boutons Telegram, nouvel essai dans 10 s")
             if not une_fois:

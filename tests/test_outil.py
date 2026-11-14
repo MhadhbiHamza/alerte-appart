@@ -248,6 +248,8 @@ class TestCycleComplet(unittest.TestCase):
                           Path(__file__).parent.parent / "templates.md", self.tmp / "suivi.csv",
                           self.tmp / "a.db", 600)
         self.cfg.rouges = "direct"  # scénario historique : tout est envoyé ; « soir » testé à part
+        # pas de messages programmés pendant les tests (sinon le résultat dépend de l'heure)
+        self.cfg.heure_resume_soir = self.cfg.heure_bilan_matin = None
         self.db = Stockage(self.cfg.fichier_db)
         self.emails = [
             ("INBOX:1:1", email_de("Jinka <alerte@jinka.fr>", HTML_JINKA)),
@@ -347,7 +349,6 @@ class TestCycleComplet(unittest.TestCase):
 
     def test_rouges_mises_de_cote_puis_resume_du_soir(self):
         self.cfg.rouges = "soir"
-        self.cfg.heure_resume_soir = 21
         # une annonce 🔴 garantie : DPE G
         self.emails.append(("INBOX:1:9", email_de("PAP <alerte@pap.fr>",
                             texte="Studio 20 m² - Paris 13e (75013) DPE G\n800 € CC\nhttps://www.pap.fr/annonces/rouge")))
@@ -358,6 +359,7 @@ class TestCycleComplet(unittest.TestCase):
         self.assertEqual(lignes[str(rouge["id"])]["statut"], "mise de côté 🔴")
         self.assertFalse(any("rouge" in str(c) for c in self.envoyes()))
         # résumé du soir : listée avec un bouton « Voir »
+        self.cfg.heure_resume_soir = 21
         soir = datetime.now().replace(hour=21, minute=5)
         main.resumes.envoyer_programmes(self.cfg, self.db, soir)
         texte, options = self.envoyes()[-1][0][2], self.envoyes()[-1][1]
@@ -741,6 +743,34 @@ class TestFiabilite(unittest.TestCase):
 def time_futur():
     import time
     return time.time() + 3600
+
+
+class TestServeur(unittest.TestCase):
+    def test_conflit_409_signale(self):
+        reponse = mock.Mock(status_code=409, ok=False, text="Conflict: terminated by other getUpdates request")
+        with mock.patch.object(main.telegram._session, "post", return_value=reponse):
+            with self.assertRaises(main.telegram.ConflitTelegram):
+                main.telegram.mises_a_jour("tok", 0, 1)
+
+    def test_connexion_reutilisee(self):
+        reponse = mock.Mock(status_code=200, ok=True)
+        reponse.json.return_value = {"result": {"message_id": 1}}
+        with mock.patch.object(main.telegram._session, "post", return_value=reponse) as post:
+            main.telegram.envoyer("tok", "42", "a")
+            main.telegram.envoyer("tok", "42", "b")
+        self.assertEqual(post.call_count, 2)   # même Session : connexion gardée ouverte
+
+    def test_commande_csv(self):
+        tmp = Path(tempfile.mkdtemp())
+        csv_ = tmp / "suivi.csv"
+        csv_.write_text("id;date\n1;x\n", encoding="utf-8")
+        cfg = mock.Mock(telegram_token="tok", telegram_chat_id="42", fichier_csv=csv_)
+        with mock.patch.object(main.telegram, "envoyer_fichier") as envoi, \
+             mock.patch.object(main.telegram, "envoyer") as texte:
+            main.bot.traiter_commande(cfg, mock.Mock(), "/csv")
+        envoi.assert_called_once()
+        self.assertEqual(envoi.call_args[0][2], csv_)
+        texte.assert_not_called()
 
 
 class TestGmail(unittest.TestCase):

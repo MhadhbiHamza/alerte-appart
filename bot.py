@@ -330,6 +330,7 @@ COMMANDES = [
     ("reprise", "Reprendre la lecture des alertes"),
     ("stats", "Chiffres des 7 derniers jours et au total"),
     ("suivi", "Candidatures en cours"),
+    ("csv", "Recevoir le fichier de suivi (Excel)"),
     ("aide", "Liste des commandes et des boutons"),
 ]
 
@@ -338,6 +339,7 @@ AIDE = """🤖 <b>Commandes</b>
 /reprise — reprendre
 /stats — chiffres des 7 derniers jours et au total
 /suivi — candidatures en cours
+/csv — recevoir le fichier de suivi (Excel)
 
 <b>Boutons</b> : ✅ Postuler envoie votre dossier (ou vous demande l'email de l'agence) ·
 📊 Détails / 🔼 Réduire · 📋 Message à copier · 📝 Brouillon · 🌐 Déjà postulé ·
@@ -359,6 +361,13 @@ def traiter_commande(cfg: Config, db: Stockage, texte: str) -> None:
         reponse = resumes.texte_stats(db, datetime.now())
     elif commande == "suivi":
         reponse = resumes.texte_suivi(db)
+    elif commande == "csv":
+        if not cfg.fichier_csv.exists():
+            reponse = "Le fichier de suivi n'existe pas encore (aucune annonce notifiée)."
+        else:
+            telegram.envoyer_fichier(cfg.telegram_token, cfg.telegram_chat_id, cfg.fichier_csv,
+                                     "📁 Fichier de suivi (à ouvrir avec Excel)")
+            return
     else:  # /aide, /start, ou commande inconnue
         reponse = AIDE
     telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, reponse)
