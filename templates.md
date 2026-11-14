@@ -21,11 +21,11 @@ Candidature – Appartement {surface} m² {ville} – {prix} € CC
 
 Bonjour,
 
-Je suis très intéressé(e) par votre appartement de {surface} m² à {ville}, proposé à {prix} € charges comprises ({lien}).
+Je suis très intéressé par votre appartement de {surface} m² à {ville}, proposé à {prix} € charges comprises ({lien}).
 
-[Présentez-vous en 2-3 lignes : situation professionnelle, type de contrat, revenus nets mensuels, garant éventuel.]
+Professionnel en CDI dans le secteur de l'intelligence artificielle à Paris, je bénéficie d'une rémunération annuelle brute de 42 000 €. Sérieux, organisé et soigneux, je recherche un logement que je souhaite occuper durablement en tant que résidence principale. Je dispose d'un dossier locatif complet, d'une situation professionnelle stable et d'un garant personnel, et reste disponible rapidement pour toute visite ou démarche complémentaire. Je suis un locataire respectueux, attentif à l'entretien du logement et particulièrement soucieux de respecter mes engagements.
 
-Mon dossier complet est prêt (pièce d'identité, contrat de travail, 3 derniers bulletins de salaire, dernier avis d'imposition, garant). Je peux vous l'envoyer immédiatement et je suis disponible rapidement pour une visite.
+Je peux vous transmettre mon dossier (pièce d'identité, contrat de travail, 3 derniers bulletins de salaire, dernier avis d'imposition, justificatifs du garant) dès aujourd'hui.
 
 Bien cordialement,
 [Prénom Nom]
