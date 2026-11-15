@@ -248,26 +248,29 @@ def traiter_boutons(cfg: Config, db: Stockage, attente: int) -> None:
                 traiter_message(cfg, db, message)
         except Exception as exc:
             log.exception("Erreur en traitant un bouton ou un message Telegram")
-            if clic:
-                telegram.repondre_clic(cfg.telegram_token, clic["id"], f"⚠️ Erreur : {exc}"[:200], alerte=True)
-            else:
-                telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id,
-                                 telegram.echapper(f"⚠️ Erreur : {exc}"[:500]))
+            try:  # on prévient, sans que cet avertissement puisse lui-même planter la boucle
+                if clic:
+                    _repondre(cfg, clic, f"⚠️ Erreur : {exc}"[:200], alerte=True)
+                else:
+                    telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id,
+                                     telegram.echapper(f"⚠️ Erreur : {exc}"[:500]))
+            except Exception:
+                log.warning("Impossible de signaler l'erreur dans Telegram")
 
 
 def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
     token = cfg.telegram_token
     chat = str(clic.get("message", {}).get("chat", {}).get("id"))
     if chat != str(cfg.telegram_chat_id):  # sécurité : seuls VOS appuis comptent
-        telegram.repondre_clic(token, clic["id"], "Non autorisé.")
+        _repondre(cfg, clic, "Non autorisé.")
         return
     action, id_texte, signature = (clic.get("data", "").split(":") + ["", ""])[:3]
     if action == "rien" or not id_texte.isdigit():
-        telegram.repondre_clic(token, clic["id"])
+        _repondre(cfg, clic)
         return
     annonce = db.annonce(int(id_texte))
     if annonce is None or signature != jeton(annonce):
-        telegram.repondre_clic(token, clic["id"], "Bouton périmé (ancien message) : rien n'a été fait. "
+        _repondre(cfg, clic, "Bouton périmé (ancien message) : rien n'a été fait. "
                                "Utilisez la notification la plus récente.", alerte=True)
         return
     message_clique = clic.get("message", {}).get("message_id")
@@ -282,7 +285,7 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
             clavier = [[("🔼 Réduire", donnee_bouton(annonce, "reduire")) if details
                         else ("📊 Détails", donnee_bouton(annonce, "details"))]]
         telegram.modifier_texte(token, cfg.telegram_chat_id, message_clique, texte, clavier)
-        telegram.repondre_clic(token, clic["id"])
+        _repondre(cfg, clic)
         return
     if action == "script":
         script = rapport_agent(annonce).get("script_appel") or "Pas de script pour cette annonce."
@@ -290,7 +293,7 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
                          f"📞 <b>Script d'appel</b> ({telegram.echapper(annonce['ville'] or '')}) :\n"
                          f"<pre>{telegram.echapper(script)}</pre>\n<i>[PRÉSENTATION] : votre situation "
                          "(CDI, revenus, garant), comme dans votre message.</i>", silencieux=True)
-        telegram.repondre_clic(token, clic["id"])
+        _repondre(cfg, clic)
         return
     if action == "message":
         _, message = preparer_candidature(cfg, annonce)
@@ -298,16 +301,16 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
                          f"📋 Message pour {telegram.echapper(annonce['ville'] or '')} · {annonce['prix_cc']} € "
                          f"(appuyez dessus pour le copier) :\n<pre>{telegram.echapper(message)[:3800]}</pre>",
                          silencieux=True)
-        telegram.repondre_clic(token, clic["id"])
+        _repondre(cfg, clic)
         return
     if action == "afficher":  # depuis le résumé du soir : la 🔴 mise de côté
         resume = analyser(cfg, db, annonce)
         envoyer_carte(cfg, db, annonce, resume, silencieux=True)
-        telegram.repondre_clic(token, clic["id"], "Annonce affichée.")
+        _repondre(cfg, clic, "Annonce affichée.")
         return
 
     if annonce["envoye_le"]:  # protection contre le double envoi
-        telegram.repondre_clic(token, clic["id"], f"Dossier déjà envoyé le {_date(annonce['envoye_le'])}.")
+        _repondre(cfg, clic, f"Dossier déjà envoyé le {_date(annonce['envoye_le'])}.")
         return
 
     # --- Annonce suspecte : « Postuler » demande un 2e appui dans les 60 s ---
@@ -316,26 +319,26 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
         cle = f"confirmation:{annonce['id']}"
         if alertes and time.time() - float(db.lire_etat(cle, "0") or 0) > 60:
             db.ecrire_etat(cle, f"{time.time():.0f}")
-            telegram.repondre_clic(token, clic["id"], "🚩 Annonce suspecte : " + ", ".join(alertes)
+            _repondre(cfg, clic, "🚩 Annonce suspecte : " + ", ".join(alertes)
                                    + ". Appuyez encore sur Postuler dans les 60 s pour confirmer.", alerte=True)
             return
 
     if action == "valider":  # l'agent a trouvé un email : vous validez, le dossier part
         email = rapport_agent(annonce).get("contact", {}).get("email", "")
         if not email and not annonce["essai"]:
-            telegram.repondre_clic(token, clic["id"], "Pas d'email trouvé par l'agent.")
+            _repondre(cfg, clic, "Pas d'email trouvé par l'agent.")
             return
         if email:
             db.maj(annonce["id"], email_contact=email)
         ok, reponse = envoyer_dossier(cfg, db, db.annonce(annonce["id"]),
                                       [message_clique, annonce["message_id"]])
-        telegram.repondre_clic(token, clic["id"], reponse, alerte=not ok)
+        _repondre(cfg, clic, reponse, alerte=not ok)
         return
 
     if action == "appele":
         _enregistrer(cfg, db, annonce, "appelé", "appel téléphonique")
         _remplacer_boutons(cfg, [message_clique, annonce["message_id"]], "📞 Appelé")
-        telegram.repondre_clic(token, clic["id"], "Noté : vous avez appelé.")
+        _repondre(cfg, clic, "Noté : vous avez appelé.")
         return
 
     if action == "refuser":
@@ -343,16 +346,16 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
         supprimees = _supprimer_messages(cfg, annonce, message_clique)
         if not supprimees:  # trop ancien pour être supprimé (> 48 h) : on remplace les boutons
             _remplacer_boutons(cfg, [message_clique], "❌ Pas intéressé")
-        telegram.repondre_clic(token, clic["id"], "Annonce supprimée." if supprimees else "Annonce classée.")
+        _repondre(cfg, clic, "Annonce supprimée." if supprimees else "Annonce classée.")
 
     elif action == "site":
         _enregistrer(cfg, db, annonce, "postulé", "sur le site")
         _remplacer_boutons(cfg, [message_clique], "🌐 Postulé sur le site")
-        telegram.repondre_clic(token, clic["id"], "Noté : candidature faite sur le site.")
+        _repondre(cfg, clic, "Noté : candidature faite sur le site.")
 
     elif action == "brouillon":
         if not destinataire(cfg, annonce):
-            telegram.repondre_clic(token, clic["id"], "Pas d'email pour cette annonce.")
+            _repondre(cfg, clic, "Pas d'email pour cette annonce.")
             return
         objet, message = preparer_candidature(cfg, annonce)
         pdf = cfg.dossier_pdf if cfg.dossier_pdf.is_file() else None
@@ -364,16 +367,16 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
             imap.logout()
         _enregistrer(cfg, db, annonce, "brouillon créé", "brouillon Gmail")
         _remplacer_boutons(cfg, [message_clique], "📝 Brouillon créé dans Gmail")
-        telegram.repondre_clic(token, clic["id"], "Brouillon créé : relisez-le dans Gmail puis envoyez-le.")
+        _repondre(cfg, clic, "Brouillon créé : relisez-le dans Gmail puis envoyez-le.")
 
     elif action == "postuler" and (annonce["email_contact"] or (annonce["essai"] and not cfg.agents_actifs)):
         # L'annonce donne l'email (ou essai sans agent) : envoi direct.
         ok, reponse = envoyer_dossier(cfg, db, annonce, [message_clique])
-        telegram.repondre_clic(token, clic["id"], reponse, alerte=not ok)
+        _repondre(cfg, clic, reponse, alerte=not ok)
 
     elif action == "postuler" and cfg.agents_actifs:
         # Pas d'email dans l'alerte : l'agent le cherche (recherche web, site de l'agence).
-        telegram.repondre_clic(token, clic["id"], lancer_agent(cfg, db, annonce), alerte=True)
+        _repondre(cfg, clic, lancer_agent(cfg, db, annonce), alerte=True)
 
     elif action in ("postuler", "demander_email"):
         # Pas d'agent (ou rien trouvé) : on vous demande l'email. Votre réponse déclenche l'envoi.
@@ -385,7 +388,7 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
             "agence@exemple.fr")
         db.ecrire_etat(f"demande_email:{demande}", annonce["id"])
         db.ecrire_etat("derniere_demande_email", f"{annonce['id']}:{demande}:{time.time():.0f}")
-        telegram.repondre_clic(token, clic["id"], "Répondez avec l'email de l'agence.")
+        _repondre(cfg, clic, "Répondez avec l'email de l'agence.")
 
 
 COMMANDES = [
@@ -487,6 +490,12 @@ def envoyer_dossier(cfg: Config, db: Stockage, annonce, messages: list):
     _enregistrer(cfg, db, annonce, "dossier envoyé" + essai, f"email envoyé le {_date(quand)} à {a_qui}")
     _remplacer_boutons(cfg, messages, f"✅ Dossier envoyé le {_date(quand)}{essai}")
     return True, f"Dossier envoyé à {a_qui} ✅{essai}"
+
+
+def _repondre(cfg: Config, clic: dict, texte: str = "", alerte: bool = False) -> None:
+    """Réponse à un appui. Si l'appui est trop ancien pour Telegram, la réponse part en message."""
+    if not telegram.repondre_clic(cfg.telegram_token, clic["id"], texte, alerte=alerte) and texte:
+        telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, telegram.echapper(texte), silencieux=True)
 
 
 def _enregistrer(cfg: Config, db: Stockage, annonce, statut: str, candidature: str) -> None:

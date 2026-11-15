@@ -136,9 +136,20 @@ def mises_a_jour(token: str, offset: int, attente: int) -> list:
                   timeout=attente + 15) or []
 
 
-def repondre_clic(token: str, id_clic: str, texte: str = "", alerte: bool = False) -> None:
-    """Affiche une courte réponse à l'appui (alerte=True : fenêtre à valider)."""
-    _appel(token, "answerCallbackQuery", {"callback_query_id": id_clic, "text": texte[:200], "show_alert": alerte})
+def repondre_clic(token: str, id_clic: str, texte: str = "", alerte: bool = False) -> bool:
+    """Affiche une courte réponse à l'appui (alerte=True : fenêtre à valider).
+
+    Renvoie False si Telegram refuse parce que l'appui est trop ancien (l'outil était en veille ou
+    occupé quand vous avez appuyé) : l'appelant envoie alors la réponse en message normal.
+    """
+    try:
+        _appel(token, "answerCallbackQuery", {"callback_query_id": id_clic, "text": texte[:200],
+                                               "show_alert": alerte})
+    except RuntimeError as exc:
+        if "query is too old" in str(exc) or "query ID is invalid" in str(exc):
+            return False
+        raise
+    return True
 
 
 def modifier_boutons(token: str, chat_id: str, message_id: int, boutons: Boutons) -> None:

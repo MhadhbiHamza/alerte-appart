@@ -31,7 +31,8 @@ def _guillemets(nom: str) -> str:
 
 
 def connexion(adresse: str, mot_de_passe: str) -> imaplib.IMAP4_SSL:
-    imap = imaplib.IMAP4_SSL(SERVEUR_IMAP, 993)
+    # timeout : sans lui, une connexion coupée (veille, Wi-Fi) peut bloquer l'outil très longtemps.
+    imap = imaplib.IMAP4_SSL(SERVEUR_IMAP, 993, timeout=60)
     imap.login(adresse, mot_de_passe)
     return imap
 

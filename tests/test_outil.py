@@ -1001,6 +1001,27 @@ class TestOutilsAgents(unittest.TestCase):
             self.assertEqual(main.ia.discuter(cfg, [{"role": "user", "content": "x"}])["content"], "OK")
         dort.assert_called_once_with(2.0)
 
+    def test_appui_trop_ancien(self):
+        """Cas réel : appui traité 47 min plus tard (PC en veille) -> Telegram refuse la réponse."""
+        trop_vieux = reponse_http(statut=400, texte='{"ok":false,"description":"Bad Request: query is too old '
+                                                     'and response timeout expired or query ID is invalid"}')
+        with mock.patch.object(main.telegram._session, "post", return_value=trop_vieux):
+            self.assertFalse(main.telegram.repondre_clic("tok", "c1", "texte"))
+        cfg = mock.Mock(telegram_token="tok", telegram_chat_id="42")
+        with mock.patch.object(main.telegram, "repondre_clic", return_value=False), \
+             mock.patch.object(main.telegram, "envoyer") as envoyer:
+            main.bot._repondre(cfg, {"id": "c1"}, "🤖 Je cherche le contact")
+        self.assertIn("Je cherche le contact", envoyer.call_args[0][2])   # la réponse arrive quand même
+        autre = reponse_http(statut=400, texte='{"description":"Bad Request: autre chose"}')
+        with mock.patch.object(main.telegram._session, "post", return_value=autre):
+            with self.assertRaises(RuntimeError):
+                main.telegram.repondre_clic("tok", "c1", "x")
+
+    def test_imap_avec_delai_maximal(self):
+        with mock.patch.object(main.gmail.imaplib, "IMAP4_SSL") as imap:
+            main.gmail.connexion("a@b.fr", "mdp")
+        self.assertEqual(imap.call_args[1]["timeout"], 60)
+
     def test_modele_retire_propose_les_disponibles(self):
         cfg = mock.Mock(llm_cle="k", llm_url="https://x", llm_modele="ancien-modele", llm_max_jour=10)
         refus = reponse_http(statut=404, texte='{"error":{"code":"model_not_found","message":"The model does not exist"}}')
