@@ -793,6 +793,16 @@ TEXTE_AGENCE = ("Appartement 2 pièces 30 m² - Paris 13e (75013) 850 € CC. An
                 "réf. 1234, proche Butte-aux-Cailles.\nhttps://www.seloger.com/annonces/lumiere")
 
 
+DESCRIPTION_AGENCE = ("Bel appartement de 2 pièces de 30 m² au 3e étage avec ascenseur, lumineux, proche "
+                      "Butte-aux-Cailles. Loyer 850 € charges comprises. Disponible le 1er décembre. "
+                      "Agence Lumière, 12 rue de la Butte, 75013 Paris. Honoraires : 390 €.")
+DESCRIPTION_PARTICULIER = ("Je loue mon studio de 22 m² refait à neuf, Paris 14e. 780 € CC. Particulier, "
+                           "merci de m'appeler au 06 12 34 56 78 ou d'écrire à jean.dupont@gmail.com.")
+DESCRIPTION_ARNAQUE = ("Magnifique 3 pièces de 60 m², 750 € CC. Je suis actuellement à l'étranger pour mon travail, "
+                       "pas de visite possible, je vous envoie les clés par la poste après paiement de la caution "
+                       "par Western Union. Contact : proprio.paris@gmail.com")
+
+
 class TestAgents(unittest.TestCase):
     """Agents avec IA, Tavily et sites web simulés."""
     setUp = TestCycleComplet.setUp
@@ -801,21 +811,23 @@ class TestAgents(unittest.TestCase):
     envoyes = TestCycleComplet.envoyes
     d = TestCycleComplet.d
 
-    def preparer(self, email_dans_page="contact@agence-lumiere.fr", email_donne_par_ia=None, canal="email"):
+    def preparer(self, email_dans_page="contact@agence-lumiere.fr", email_donne_par_ia=None, canal="email",
+                 verification=None, texte_alerte=TEXTE_AGENCE, expediteur="SeLoger <alertes@mail.seloger.com>"):
         self.cfg.llm_cle, self.cfg.tavily_cle = "cle-ia", "cle-tavily"
         self.cfg.email_reponse = "perso@moi.fr"
-        self.emails = [("INBOX:1:1", email_de("SeLoger <alertes@mail.seloger.com>", texte=TEXTE_AGENCE))]
+        self.emails = [("INBOX:1:1", email_de(expediteur, texte=texte_alerte))]
         self.requetes_ia, email_ia = [], email_donne_par_ia or email_dans_page
+        verification = verification or {"type_annonceur": "agence", "agence": "Agence Lumière", "email": "",
+                                        "telephone": "", "risque_arnaque": 10, "signaux_arnaque": [],
+                                        "questions_visite": ["Date de disponibilité ?"],
+                                        "synthese": "Annonce d'agence classique."}
 
         def faux_llm(url, **options):
             corps = options["json"]
             self.requetes_ia.append(corps)
             systeme = corps["messages"][0]["content"]
-            if systeme == main.agents.SYSTEME_EVALUATEUR:
-                return message_ia(json.dumps({
-                    "interet": 4, "synthese": "Bon 2 pièces bien placé.", "points_forts": ["quartier"],
-                    "risques": ["charges à vérifier"], "questions_visite": ["Date de disponibilité ?"],
-                    "recommandation": "candidater"}))
+            if systeme == main.agents.SYSTEME_VERIFICATEUR:
+                return message_ia(json.dumps(verification))
             if systeme == main.agents.SYSTEME_CONTACT:
                 tours = sum(1 for m in corps["messages"] if m["role"] == "assistant")
                 if tours == 0:
@@ -826,8 +838,9 @@ class TestAgents(unittest.TestCase):
                                                       agence="Agence Lumière", confiance=0.9,
                                                       source_url="https://agence-lumiere.fr/contact")])
             return message_ia(json.dumps({
-                "canal": canal, "raison": "email de l'agence trouvé",
-                "accroche": "Le quartier de la Butte-aux-Cailles et la luminosité de ce 2 pièces m'ont convaincu."}))
+                "canal": canal, "raison": "contact trouvé",
+                "accroche": "Le quartier de la Butte-aux-Cailles et la luminosité de ce 2 pièces m'ont convaincu.",
+                "script_appel": "Bonjour, je vous appelle pour le studio.\n[PRÉSENTATION]\nEst-il disponible ?"}))
 
         def faux_get(url, timeout=None, stream=None):
             self.pages_lues.append(url)
@@ -847,136 +860,184 @@ class TestAgents(unittest.TestCase):
                    mock.patch.object(main.recherche._session, "get", side_effect=faux_get)):
             pt.start()
             self.addCleanup(pt.stop)
+        main.boucle(self.cfg, self.db, une_fois=True)
+        self.n = 100
 
-    def postuler(self, n=101):
-        """Vous appuyez sur « ✅ Postuler » : c'est ce qui déclenche l'agent."""
-        self.clics = [clic(n, self.d("postuler", 1))]
+    def appui(self, action):
+        self.n += 1
+        self.clics = [clic(self.n, self.d(action, 1))]
         main.traiter_boutons(self.cfg, self.db, 0)
+
+    def coller(self, texte):
+        """Vous collez la description de l'annonce dans le chat (sans « répondre »)."""
+        self.n += 1
+        self.clics = [{"update_id": self.n, "message": {"message_id": 700 + self.n, "chat": {"id": 42}, "text": texte}}]
+        main.traiter_boutons(self.cfg, self.db, 0)
+
+    def faire_travailler(self):
+        main.agents.traiter_en_attente(self.cfg, self.db)
+        main.bot.envoyer_rapports(self.cfg, self.db)
+        dernier = self.envoyes()[-1]
+        return main.bot.rapport_agent(self.db.annonce(1)), (dernier[0][2], dernier[1])
 
     def test_rien_ne_tourne_sans_postuler(self):
         self.preparer()
-        main.boucle(self.cfg, self.db, une_fois=True)
         main.agents.traiter_en_attente(self.cfg, self.db)
         self.assertIsNone(self.db.annonce(1)["agent_etat"])
-        self.assertEqual(self.requetes_ia, [])          # aucune requête IA ni recherche dépensée
-        self.assertEqual(self.pages_lues, [])
+        self.assertEqual((self.requetes_ia, self.pages_lues), ([], []))   # aucun quota dépensé
 
-    def test_parcours_agent_email(self):
+    def test_postuler_demande_la_description(self):
         self.preparer()
-        main.boucle(self.cfg, self.db, une_fois=True)
-        self.postuler()
-        self.assertEqual(self.db.annonce(1)["agent_etat"], "en_attente")
-        self.assertIn("Je cherche le contact", self.m["repondre_clic"].call_args[0][2])
-        self.m["demander_reponse"].assert_not_called()   # plus besoin de donner l'email vous-même
-        self.assertEqual(main.agents.traiter_en_attente(self.cfg, self.db), 1)
-        # pas d'évaluation par l'IA : seulement la recherche du contact et la rédaction
-        systemes = [r["messages"][0]["content"] for r in self.requetes_ia]
-        self.assertNotIn(main.agents.SYSTEME_EVALUATEUR, systemes)
-        rapport = main.bot.rapport_agent(self.db.annonce(1))
-        self.assertEqual(rapport["contact"]["email"], "contact@agence-lumiere.fr")
-        self.assertEqual(rapport["canal"], "email")
-        # jamais de lecture des sites d'annonces
+        self.appui("postuler")
+        demande, options = self.envoyes()[-1][0][2], self.envoyes()[-1][1]
+        self.assertIn("Collez ici la description", demande)
+        boutons = [d for ligne in options["boutons"] for _, d in ligne]
+        self.assertIn(self.d("sans_copier", 1), boutons)
+        self.assertTrue(any(d.startswith("https://www.seloger.com") for d in boutons))   # 🔗 Ouvrir l'annonce
+        self.assertIsNone(self.db.annonce(1)["agent_etat"])   # l'agent attend la description
+
+    def test_agence_description_collee_puis_envoi_avec_dossier(self):
+        self.preparer()
+        self.appui("postuler")
+        self.coller(DESCRIPTION_AGENCE)
+        self.assertEqual(self.db.annonce(1)["texte_complet"], DESCRIPTION_AGENCE)
+        self.assertIn("J'analyse l'annonce", self.envoyes()[-1][0][2])
+        rapport, (texte, options) = self.faire_travailler()
+        v = rapport["verification"]
+        self.assertEqual((v["niveau"], v["type_annonceur"], v["agence"]), ("vert", "agence", "Agence Lumière"))
+        self.assertEqual(rapport["contact"]["email"], "contact@agence-lumiere.fr")   # trouvé via le nom d'agence
+        self.assertTrue(rapport["joindre_dossier"])
         self.assertFalse(any("seloger" in u for u in self.pages_lues))
-        # le rapport part en réponse à la carte
-        main.bot.envoyer_rapports(self.cfg, self.db)
-        texte, options = self.envoyes()[-1][0][2], self.envoyes()[-1][1]
-        self.assertIn("🤖 <b>Contact de l'annonceur</b>", texte)
-        self.assertIn("contact@agence-lumiere.fr", texte)
-        self.assertEqual(options["repondre_a"], self.db.annonce(1)["message_id"])
+        self.assertIn("🤖 <b>Avis de l'agent</b>", texte)
+        self.assertIn("🟢 aucun signal d'arnaque", texte)
+        self.assertIn("🏢 agence (Agence Lumière)", texte)
+        self.assertIn("Agence : envoyez votre message et votre dossier", texte)
         self.assertEqual(options["boutons"][0][0][1], self.d("valider", 1))
-        self.assertEqual(self.db.annonce(1)["agent_etat"], "fini")
-        main.bot.envoyer_rapports(self.cfg, self.db)          # pas renvoyé
-        self.assertEqual(len([c for c in self.envoyes() if "Contact de l'annonceur" in c[0][2]]), 1)
-        self.assertFalse(options["silencieux"])          # c'est la réponse à votre demande : avec son
-        # ré-appuyer sur Postuler ne relance pas de recherche : le rapport est renvoyé tel quel
-        nb_ia = len(self.requetes_ia)
-        self.postuler(102)
-        self.assertEqual(self.db.annonce(1)["agent_etat"], "pret")
-        self.assertEqual(len(self.requetes_ia), nb_ia)
-        main.bot.envoyer_rapports(self.cfg, self.db)
-        # rien n'est envoyé sans « Valider »
-        self.m["envoyer_email"].assert_not_called()
-        self.clics = [clic(201, self.d("valider", 1)), clic(202, self.d("valider", 1))]
-        main.traiter_boutons(self.cfg, self.db, 0)
-        self.m["envoyer_email"].assert_called_once()
-        a_qui, corps = self.m["envoyer_email"].call_args[0][2], self.m["envoyer_email"].call_args[0][4]
-        self.assertEqual(a_qui, "contact@agence-lumiere.fr")
-        self.assertIn("Butte-aux-Cailles et la luminosité", corps)   # accroche de l'agent dans le message
-        self.assertIn("Professionnel en CDI", corps)                   # le reste de votre modèle
-        self.assertTrue(corps.startswith("Bonjour,\n\nLe quartier"))
+        self.assertEqual(options["repondre_a"], self.db.annonce(1)["message_id"])
+        self.assertFalse(options["silencieux"])
+        self.m["envoyer_email"].assert_not_called()           # rien ne part sans votre appui
+        self.appui("valider")
+        self.appui("valider")
+        self.m["envoyer_email"].assert_called_once()           # une seule fois
+        args = self.m["envoyer_email"].call_args[0]
+        self.assertEqual((args[2], args[5]), ("contact@agence-lumiere.fr", self.pdf))
+        self.assertTrue(args[4].startswith("Bonjour,\n\nLe quartier de la Butte-aux-Cailles"))   # accroche
+        self.assertIn("Professionnel en CDI", args[4])
+
+    def test_particulier_appel_et_message_sans_dossier(self):
+        self.preparer(canal="appel", texte_alerte="Studio 22 m² - Paris 14e (75014) 780 € CC\n"
+                                                  "https://www.pap.fr/annonces/r42",
+                      expediteur="PAP <alerte@pap.fr>",
+                      verification={"type_annonceur": "particulier", "agence": "", "email": "jean.dupont@gmail.com",
+                                    "telephone": "06 12 34 56 78", "risque_arnaque": 5, "signaux_arnaque": [],
+                                    "questions_visite": ["Quand puis-je visiter ?"], "synthese": "Particulier."})
+        self.appui("postuler")
+        self.coller(DESCRIPTION_PARTICULIER)
+        rapport, (texte, options) = self.faire_travailler()
+        self.assertEqual(rapport["canal"], "appel")
+        self.assertEqual(rapport["contact"]["telephone"], "06 12 34 56 78")
+        self.assertEqual(rapport["contact"]["email"], "jean.dupont@gmail.com")
+        self.assertFalse(rapport["joindre_dossier"])
+        self.assertEqual(self.pages_lues, [])                  # particulier : pas de recherche web
+        self.assertIn("👤 particulier", texte)
+        self.assertIn("n'envoyez votre dossier qu'après la visite", texte)
+        boutons = [d for ligne in options["boutons"] for _, d in ligne]
+        self.assertIn(self.d("script", 1), boutons)
+        self.assertIn(self.d("valider_msg", 1), boutons)
+        self.assertNotIn(self.d("valider", 1), boutons)       # pas de dossier proposé d'emblée
+        self.appui("valider_msg")
+        args = self.m["envoyer_email"].call_args[0]
+        self.assertEqual(args[2], "jean.dupont@gmail.com")
+        self.assertIsNone(args[5])                              # message seul, sans le PDF
+        self.assertEqual(self.db.annonce(1)["statut"], "message envoyé")
+
+    def test_arnaque_detectee_ne_postulez_pas(self):
+        self.preparer(verification={"type_annonceur": "particulier", "agence": "", "email": "proprio.paris@gmail.com",
+                                    "telephone": "", "risque_arnaque": 95,
+                                    "signaux_arnaque": ["propriétaire à l'étranger", "paiement avant visite"],
+                                    "questions_visite": [], "synthese": "Schéma d'arnaque classique."})
+        self.appui("postuler")
+        self.coller(DESCRIPTION_ARNAQUE)
+        rapport, (texte, options) = self.faire_travailler()
+        v = rapport["verification"]
+        self.assertEqual(v["niveau"], "rouge")
+        for signal in ("paiement par Western Union / MoneyGram", "pas de visite possible", "clés envoyées par la poste"):
+            self.assertIn(signal, v["signaux"])
+        self.assertEqual(rapport["canal"], "aucun")
+        self.assertEqual(self.pages_lues, [])                  # aucune recherche pour une arnaque
+        self.assertIn("🔴 arnaque probable", texte)
+        self.assertIn("Ne postulez pas", texte)
+        boutons = [d for ligne in options["boutons"] for _, d in ligne]
+        self.assertNotIn(self.d("valider", 1), boutons)
+        self.assertNotIn(self.d("valider_msg", 1), boutons)
+
+    def test_regles_d_arnaque_meme_si_l_ia_ne_voit_rien(self):
+        self.preparer(verification={"type_annonceur": "particulier", "agence": "", "email": "", "telephone": "",
+                                    "risque_arnaque": 0, "signaux_arnaque": [], "questions_visite": [],
+                                    "synthese": "RAS."})
+        self.appui("postuler")
+        self.coller(DESCRIPTION_ARNAQUE)
+        rapport, _ = self.faire_travailler()
+        self.assertEqual(rapport["verification"]["niveau"], "rouge")   # les règles gardent le dernier mot
+
+    def test_sans_copier_recherche_avec_l_alerte(self):
+        self.preparer()
+        self.appui("postuler")
+        self.appui("sans_copier")
+        self.assertEqual(self.db.annonce(1)["agent_etat"], "en_attente")
+        rapport, (texte, _) = self.faire_travailler()
+        self.assertEqual(rapport["contact"]["email"], "contact@agence-lumiere.fr")
+        self.assertIn("collez la description pour une analyse complète", texte)
+        # aucune requête de vérification sans description (économie de quota)
+        systemes = [r["messages"][0]["content"] for r in self.requetes_ia]
+        self.assertNotIn(main.agents.SYSTEME_VERIFICATEUR, systemes)
+        self.assertNotIn(main.agents.SYSTEME_EVALUATEUR, systemes)
 
     def test_aucune_donnee_personnelle_envoyee_a_l_ia(self):
         self.preparer()
-        main.boucle(self.cfg, self.db, une_fois=True)
-        self.postuler()
-        main.agents.traiter_en_attente(self.cfg, self.db)
+        self.appui("postuler")
+        self.coller(DESCRIPTION_AGENCE)
+        self.faire_travailler()
         tout = json.dumps(self.requetes_ia, ensure_ascii=False)
         for secret in ("42 000", "perso@moi.fr", "moi@gmail.com", "Professionnel en CDI", "dossier.pdf"):
             self.assertNotIn(secret, tout)
-        self.assertIn("Agence Lumière", tout)   # l'annonce, elle, est bien transmise
+        self.assertIn("Agence Lumière", tout)
 
     def test_email_invente_rejete(self):
         self.preparer(email_donne_par_ia="invente@nulle-part.fr")
-        main.boucle(self.cfg, self.db, une_fois=True)
-        self.postuler()
-        main.agents.traiter_en_attente(self.cfg, self.db)
-        rapport = main.bot.rapport_agent(self.db.annonce(1))
+        self.appui("postuler")
+        self.coller(DESCRIPTION_AGENCE)
+        rapport, (_, options) = self.faire_travailler()
         self.assertEqual(rapport["contact"]["email"], "")
-        self.assertEqual(rapport["canal"], "formulaire")   # l'IA ne peut pas choisir l'email sans email vérifié
-        main.bot.envoyer_rapports(self.cfg, self.db)
-        boutons = [d for ligne in self.envoyes()[-1][1]["boutons"] for _, d in ligne]
+        self.assertEqual(rapport["canal"], "formulaire")
+        boutons = [d for ligne in options["boutons"] for _, d in ligne]
         self.assertNotIn(self.d("valider", 1), boutons)
-        # rien trouvé : « Je donne l'email » propose de le donner vous-même
         self.assertIn(self.d("demander_email", 1), boutons)
-        self.clics = [clic(301, self.d("demander_email", 1))]
-        main.traiter_boutons(self.cfg, self.db, 0)
-        self.m["demander_reponse"].assert_called_once()
+
+    def test_mode_essai_envoi_vers_vous(self):
+        self.preparer()
+        self.db.db.execute("UPDATE annonces SET essai=1")
+        self.db.db.commit()
+        self.appui("postuler")
+        self.coller(DESCRIPTION_AGENCE)
+        self.faire_travailler()
+        self.appui("valider")
+        args = self.m["envoyer_email"].call_args[0]
+        self.assertEqual(args[2], "perso@moi.fr")
+        self.assertTrue(args[3].startswith("[ESSAI] "))
 
     def test_agents_desactives_sans_cle(self):
         main.boucle(self.cfg, self.db, une_fois=True)
         self.assertTrue(all(r["agent_etat"] is None for r in self.db.db.execute("SELECT agent_etat FROM annonces")))
 
-    def test_mode_essai_lance_aussi_l_agent(self):
-        self.preparer()
-        main.boucle(self.cfg, self.db, une_fois=True)
-        self.db.db.execute("UPDATE annonces SET essai=1")
-        self.db.db.commit()
-        self.postuler()
-        self.m["envoyer_email"].assert_not_called()          # l'agent cherche d'abord
-        self.assertEqual(self.db.annonce(1)["agent_etat"], "en_attente")
-        main.agents.traiter_en_attente(self.cfg, self.db)
-        main.bot.envoyer_rapports(self.cfg, self.db)
-        self.clics = [clic(501, self.d("valider", 1))]
-        main.traiter_boutons(self.cfg, self.db, 0)
-        args = self.m["envoyer_email"].call_args[0]
-        self.assertEqual(args[2], "perso@moi.fr")            # essai : vers vous, jamais l'agence trouvée
-        self.assertTrue(args[3].startswith("[ESSAI] "))
-
-    def test_canal_appel_et_script(self):
-        self.preparer(canal="appel")
-        self.emails = [("INBOX:1:1", email_de("PAP <alerte@pap.fr>", texte=(
-            "Studio 22 m² - Paris 14e (75014) 780 € CC, particulier, merci d'appeler le 06 12 34 56 78\n"
-            "https://www.pap.fr/annonces/appel")))]
-        main.boucle(self.cfg, self.db, une_fois=True)
-        self.postuler()
-        main.agents.traiter_en_attente(self.cfg, self.db)
-        rapport = main.bot.rapport_agent(self.db.annonce(1))
-        self.assertEqual(rapport["contact"]["telephone"], "06 12 34 56 78")
-        self.assertEqual(rapport["canal"], "appel")
-        main.bot.envoyer_rapports(self.cfg, self.db)
-        self.clics = [clic(401, self.d("script", 1)), clic(402, self.d("appele", 1))]
-        main.traiter_boutons(self.cfg, self.db, 0)
-        self.assertIn("Script d'appel", self.envoyes()[-1][0][2])
-        self.assertEqual(self.db.annonce(1)["statut"], "appelé")
-
     def test_quota_du_jour(self):
         self.preparer()
         self.cfg.llm_max_jour = 1
-        main.boucle(self.cfg, self.db, une_fois=True)
-        self.postuler()
+        self.appui("postuler")
+        self.coller(DESCRIPTION_AGENCE)
         with self.assertRaises(main.ia.IAIndisponible):
             main.agents.traiter_en_attente(self.cfg, self.db)
-        self.assertEqual(self.db.annonce(1)["agent_etat"], "en_attente")   # réessayé plus tard
+        self.assertEqual(self.db.annonce(1)["agent_etat"], "en_attente")
 
 
 class TestOutilsAgents(unittest.TestCase):

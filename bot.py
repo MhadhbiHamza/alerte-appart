@@ -9,6 +9,7 @@ import re
 import time
 from datetime import datetime
 
+import agents
 import analyse
 import extraction
 import gmail
@@ -216,6 +217,25 @@ def notifier_annonces(cfg: Config, db: Stockage) -> None:
         log.info("Notification envoyée pour l'annonce #%d (%s)", annonce["id"], resume.verdict)
 
 
+def demander_description(cfg: Config, db: Stockage, annonce) -> None:
+    """Demande de coller la description : c'est elle qui permet de repérer arnaque, agence et contact."""
+    e = telegram.echapper
+    texte = (f"📋 <b>Collez ici la description de l'annonce</b> — {e(annonce['ville'] or '')} · "
+             f"{annonce['prix_cc']} €\n"
+             "1. Ouvrez l'annonce (bouton ci-dessous).\n"
+             "2. Sélectionnez tout le texte (description, nom de l'agence, téléphone s'il est affiché) → Copier.\n"
+             "3. Revenez ici et collez-le dans le chat.\n\n"
+             "L'agent vérifiera si c'est une <b>arnaque</b>, si c'est une <b>agence ou un particulier</b>, "
+             "trouvera le <b>contact</b> et vous dira comment postuler.")
+    boutons = [[("⏭ Sans copier (recherche web)", donnee_bouton(annonce, "sans_copier"))]]
+    if (annonce["lien"] or "").startswith("http"):
+        boutons.insert(0, [("🔗 Ouvrir l'annonce", annonce["lien"])])
+    demande = telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, texte, boutons=boutons,
+                               repondre_a=annonce["message_id"])
+    db.ecrire_etat(f"demande_texte:{demande}", annonce["id"])
+    db.ecrire_etat("derniere_demande", f"texte:{annonce['id']}:{demande}:{time.time():.0f}")
+
+
 def lancer_agent(cfg: Config, db: Stockage, annonce) -> str:
     """Vous voulez postuler mais l'alerte ne donne pas d'email : l'agent cherche le contact.
 
@@ -223,10 +243,13 @@ def lancer_agent(cfg: Config, db: Stockage, annonce) -> str:
     """
     if annonce["agent_etat"] in ("en_attente", "en_cours"):
         return "🤖 Recherche déjà en cours, réponse sous l'annonce dans une minute environ."
-    if annonce["agent_etat"] in ("fini", "pret") and rapport_agent(annonce).get("contact"):
+    if annonce["agent_etat"] in ("fini", "pret") and rapport_agent(annonce).get("contact") and \
+            rapport_agent(annonce).get("avec_description") == bool(agents.texte_complet(annonce)):
         db.maj(annonce["id"], agent_etat="pret")  # on renvoie le rapport déjà fait, sans rien dépenser
         return "🤖 Voici à nouveau le contact trouvé."
     db.maj(annonce["id"], agent_etat="en_attente")
+    if agents.texte_complet(annonce):
+        return "🤖 J'analyse l'annonce (arnaque, agence/particulier, contact) : réponse dans une minute environ."
     return "🤖 Je cherche le contact de l'annonceur : réponse sous l'annonce dans une minute environ."
 
 
@@ -314,8 +337,10 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
         return
 
     # --- Annonce suspecte : « Postuler » demande un 2e appui dans les 60 s ---
-    if action in ("postuler", "valider") and not annonce["essai"]:
-        alertes = analyser(cfg, db, annonce).alertes_arnaque
+    if action in ("postuler", "valider", "valider_msg") and not annonce["essai"]:
+        verif = rapport_agent(annonce).get("verification", {})
+        alertes = analyser(cfg, db, annonce).alertes_arnaque or (
+            verif.get("signaux", []) if verif.get("niveau") in ("rouge", "orange") else [])
         cle = f"confirmation:{annonce['id']}"
         if alertes and time.time() - float(db.lire_etat(cle, "0") or 0) > 60:
             db.ecrire_etat(cle, f"{time.time():.0f}")
@@ -323,7 +348,7 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
                                    + ". Appuyez encore sur Postuler dans les 60 s pour confirmer.", alerte=True)
             return
 
-    if action == "valider":  # l'agent a trouvé un email : vous validez, le dossier part
+    if action in ("valider", "valider_msg"):  # l'agent a trouvé un email : vous validez, l'email part
         email = rapport_agent(annonce).get("contact", {}).get("email", "")
         if not email and not annonce["essai"]:
             _repondre(cfg, clic, "Pas d'email trouvé par l'agent.")
@@ -331,7 +356,7 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
         if email:
             db.maj(annonce["id"], email_contact=email)
         ok, reponse = envoyer_dossier(cfg, db, db.annonce(annonce["id"]),
-                                      [message_clique, annonce["message_id"]])
+                                      [message_clique, annonce["message_id"]], joindre_pdf=action == "valider")
         _repondre(cfg, clic, reponse, alerte=not ok)
         return
 
@@ -375,7 +400,14 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
         _repondre(cfg, clic, reponse, alerte=not ok)
 
     elif action == "postuler" and cfg.agents_actifs:
-        # Pas d'email dans l'alerte : l'agent le cherche (recherche web, site de l'agence).
+        # Pas d'email dans l'alerte : l'agent a besoin de la vraie annonce pour vérifier et trouver le contact.
+        if agents.texte_complet(annonce) or annonce["agent_etat"]:
+            _repondre(cfg, clic, lancer_agent(cfg, db, annonce), alerte=True)
+        else:
+            demander_description(cfg, db, annonce)
+            _repondre(cfg, clic, "📋 Collez la description de l'annonce dans le chat.")
+
+    elif action == "sans_copier":  # vous ne voulez pas coller : l'agent fait avec l'alerte seule
         _repondre(cfg, clic, lancer_agent(cfg, db, annonce), alerte=True)
 
     elif action in ("postuler", "demander_email"):
@@ -387,7 +419,7 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
             "(visible sur l'annonce) : votre dossier partira aussitôt.",
             "agence@exemple.fr")
         db.ecrire_etat(f"demande_email:{demande}", annonce["id"])
-        db.ecrire_etat("derniere_demande_email", f"{annonce['id']}:{demande}:{time.time():.0f}")
+        db.ecrire_etat("derniere_demande", f"email:{annonce['id']}:{demande}:{time.time():.0f}")
         _repondre(cfg, clic, "Répondez avec l'email de l'agence.")
 
 
@@ -439,57 +471,82 @@ def traiter_commande(cfg: Config, db: Stockage, texte: str) -> None:
     telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, reponse)
 
 
+def _demande_en_cours(db: Stockage, repond_a):
+    """Quelle demande ce message complète-t-il ? Renvoie (type « texte » / « email », n° d'annonce) ou None."""
+    if repond_a:
+        for type_ in ("texte", "email"):
+            id_texte = db.lire_etat(f"demande_{type_}:{repond_a}")
+            if id_texte:
+                return type_, int(id_texte), repond_a
+    # Message tapé sans « répondre » : on prend la dernière demande, si elle date de moins de 2 h.
+    derniere = db.lire_etat("derniere_demande").split(":")
+    if len(derniere) == 4 and time.time() - float(derniere[3]) < 7200:
+        return derniere[0], int(derniere[1]), int(derniere[2])
+    return None
+
+
 def traiter_message(cfg: Config, db: Stockage, message: dict) -> None:
-    """Vos commandes (/pause, /stats…) et votre réponse à « Email de l'agence ? »."""
+    """Vos commandes (/pause, /stats…), la description collée, ou l'email de l'agence."""
     if str(message.get("chat", {}).get("id")) != str(cfg.telegram_chat_id):
         return  # message d'un inconnu : ignoré
-    if (message.get("text") or "").startswith("/"):
-        traiter_commande(cfg, db, message["text"])
+    texte = message.get("text") or message.get("caption") or ""
+    if texte.startswith("/"):
+        traiter_commande(cfg, db, texte)
         return
-    repond_a = (message.get("reply_to_message") or {}).get("message_id")
-    id_texte = db.lire_etat(f"demande_email:{repond_a}") if repond_a else ""
-    if not id_texte:
-        # Réponse tapée sans « répondre » : on prend la dernière demande, si elle date de moins de 2 h.
-        derniere = db.lire_etat("derniere_demande_email").split(":")
-        if len(derniere) == 3 and time.time() - float(derniere[2]) < 7200:
-            id_texte, repond_a = derniere[0], int(derniere[1])
-    if not id_texte:
+    demande = _demande_en_cours(db, (message.get("reply_to_message") or {}).get("message_id"))
+    if not demande:
         return  # message sans rapport avec une candidature
-    adresse = extraction.EMAIL_RE.search(message.get("text") or "")
-    if not adresse:
-        telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id,
-                         "Je n'ai pas trouvé d'adresse email dans votre réponse. Répondez avec l'email "
-                         "de l'agence, par exemple agence@exemple.fr.")
-        return
-    annonce = db.annonce(int(id_texte))
+    type_, id_annonce, id_demande = demande
+    annonce = db.annonce(id_annonce)
     if annonce is None:
         return
     if annonce["envoye_le"]:
         telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id,
                          f"Dossier déjà envoyé le {_date(annonce['envoye_le'])} pour cette annonce.")
         return
+    adresse = extraction.EMAIL_RE.search(texte)
+
+    if type_ == "texte" and len(texte) >= 40:  # la description de l'annonce
+        db.maj(annonce["id"], texte_complet=texte[:6000], agent_etat=None)
+        db.ecrire_etat(f"demande_texte:{id_demande}", "")
+        db.ecrire_etat("derniere_demande", "")
+        telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id,
+                         telegram.echapper(lancer_agent(cfg, db, db.annonce(annonce["id"]))), silencieux=True)
+        return
+    if not adresse:
+        telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id,
+                         "Je n'ai pas trouvé d'adresse email dans votre réponse. Répondez avec l'email de "
+                         "l'agence, par exemple agence@exemple.fr." if type_ == "email" else
+                         "C'est un peu court : collez la description complète de l'annonce (ou l'email de "
+                         "l'agence, par exemple agence@exemple.fr).")
+        return
     db.maj(annonce["id"], email_contact=adresse.group(0).lower())
     _, reponse = envoyer_dossier(cfg, db, db.annonce(annonce["id"]), [annonce["message_id"]])
-    db.ecrire_etat(f"demande_email:{repond_a}", "")
-    db.ecrire_etat("derniere_demande_email", "")
+    db.ecrire_etat(f"demande_{type_}:{id_demande}", "")
+    db.ecrire_etat("derniere_demande", "")
     telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, telegram.echapper(reponse))
 
 
-def envoyer_dossier(cfg: Config, db: Stockage, annonce, messages: list):
-    """Envoie la candidature + le PDF. Renvoie (réussi ?, texte de confirmation)."""
-    if not cfg.dossier_pdf.is_file():
+def envoyer_dossier(cfg: Config, db: Stockage, annonce, messages: list, joindre_pdf: bool = True):
+    """Envoie la candidature (+ le PDF si joindre_pdf). Renvoie (réussi ?, texte de confirmation).
+
+    joindre_pdf=False : message seul, conseillé pour un particulier (dossier après la visite).
+    """
+    if joindre_pdf and not cfg.dossier_pdf.is_file():
         return False, f"⚠️ Dossier PDF introuvable ({cfg.dossier_pdf.name}) : rien n'a été envoyé."
     objet, message = preparer_candidature(cfg, annonce)
     a_qui = destinataire(cfg, annonce)
-    gmail.envoyer_email(cfg.gmail_adresse, cfg.gmail_mot_de_passe, a_qui,
-                        objet, message, cfg.dossier_pdf, cfg.email_reponse, cfg.nom_expediteur)
+    gmail.envoyer_email(cfg.gmail_adresse, cfg.gmail_mot_de_passe, a_qui, objet, message,
+                        cfg.dossier_pdf if joindre_pdf else None, cfg.email_reponse, cfg.nom_expediteur)
     quand = maintenant()
     db.maj(annonce["id"], envoye_le=quand)
     essai = " (essai)" if annonce["essai"] else ""
-    log.info("📨 Dossier envoyé à %s (annonce #%d%s)", a_qui, annonce["id"], essai)
-    _enregistrer(cfg, db, annonce, "dossier envoyé" + essai, f"email envoyé le {_date(quand)} à {a_qui}")
-    _remplacer_boutons(cfg, messages, f"✅ Dossier envoyé le {_date(quand)}{essai}")
-    return True, f"Dossier envoyé à {a_qui} ✅{essai}"
+    quoi = "Dossier" if joindre_pdf else "Message (sans dossier)"
+    log.info("📨 %s envoyé à %s (annonce #%d%s)", quoi, a_qui, annonce["id"], essai)
+    _enregistrer(cfg, db, annonce, ("dossier envoyé" if joindre_pdf else "message envoyé") + essai,
+                 f"email envoyé le {_date(quand)} à {a_qui}" + ("" if joindre_pdf else " (sans dossier)"))
+    _remplacer_boutons(cfg, messages, f"✅ {quoi} envoyé le {_date(quand)}{essai}")
+    return True, f"{quoi} envoyé à {a_qui} ✅{essai}"
 
 
 def _repondre(cfg: Config, clic: dict, texte: str = "", alerte: bool = False) -> None:
@@ -545,41 +602,51 @@ def _date(iso: str) -> str:
 # Rapports des agents
 # --------------------------------------------------------------------------
 
+NIVEAUX_RISQUE = {"vert": "🟢 aucun signal d'arnaque", "orange": "🟠 vigilance", "rouge": "🔴 arnaque probable"}
+ANNONCEURS = {"agence": "🏢 agence", "particulier": "👤 particulier", "inconnu": "❔ inconnu"}
+
+
 def texte_rapport(cfg: Config, annonce, r: dict) -> str:
     e = telegram.echapper
-    ev, contact = r.get("evaluation", {}), r.get("contact", {})
-    reco = {"candidater": "✅ candidater", "a_verifier": "🔎 à vérifier", "passer": "⛔ passer"}
-    titre = f"🤖 <b>Contact de l'annonceur</b> — {e(annonce['ville'] or '')} · {annonce['prix_cc']} €"
-    if ev:
-        titre += f"\nIntérêt {ev.get('interet', '?')}/5 · {reco.get(ev.get('recommandation'), '?')}"
-    lignes = [titre]
+    ev, contact, verif = r.get("evaluation", {}), r.get("contact", {}), r.get("verification", {})
+    lignes = [f"🤖 <b>Avis de l'agent</b> — {e(annonce['ville'] or '')} · {annonce['prix_cc']} €"]
+    if verif:
+        lignes.append(f"🛡️ <b>{NIVEAUX_RISQUE.get(verif.get('niveau'), '?')}</b>"
+                      + (" : " + e(" · ".join(verif["signaux"])) if verif.get("signaux") else ""))
+        qui = ANNONCEURS.get(verif.get("type_annonceur") or "inconnu", "❔ inconnu")
+        if verif.get("agence"):
+            qui += f" ({e(verif['agence'])})"
+        lignes.append(f"Annonceur : {qui}")
+        if verif.get("synthese"):
+            lignes.append(e(verif["synthese"]))
+        if not r.get("avec_description"):
+            lignes.append("<i>Vérification faite sur l'alerte seule : collez la description pour une analyse "
+                          "complète.</i>")
     if ev.get("synthese"):
         lignes.append(e(ev["synthese"]))
-    if ev.get("points_forts"):
-        lignes.append("👍 " + e(" · ".join(ev["points_forts"])))
-    if ev.get("risques"):
-        lignes.append("⚠️ " + e(" · ".join(ev["risques"])))
-    if ev.get("questions_visite"):
-        lignes.append("❓ À demander : " + e(" · ".join(ev["questions_visite"])))
+    questions = verif.get("questions_visite") or ev.get("questions_visite")
+    if questions:
+        lignes.append("❓ À demander : " + e(" · ".join(questions)))
     lignes.append("")
     if contact.get("email") or contact.get("telephone"):
-        qui = f" ({e(contact['agence'])})" if contact.get("agence") else ""
-        lignes.append(f"📇 <b>Contact trouvé</b>{qui} :")
+        lignes.append("📇 <b>Contact</b> :")
         if contact.get("email"):
             lignes.append(f"✉️ {e(contact['email'])}")
         if contact.get("telephone"):
             lignes.append(f"📞 {e(contact['telephone'])}")
-        if contact.get("source_url", "").startswith("http"):
+        if contact.get("source_url", "").startswith("http") and contact.get("source_url") != annonce["lien"]:
             lignes.append(f'<a href="{e(contact["source_url"], True)}">source</a> · '
                           f"confiance {round(contact.get('confiance', 0) * 100)} %")
-    else:
+    elif r.get("canal") != "aucun":
         lignes.append("📇 Aucun contact trouvé" + (f" ({e(contact['raison'])})" if contact.get("raison") else "."))
-    canal = r.get("canal", "formulaire")
-    libelle = {"email": "✉️ email", "appel": "📞 appel", "formulaire": "🌐 formulaire du site"}[canal]
-    lignes.append(f"\n➡️ <b>Canal conseillé : {libelle}</b>" + (f" — {e(r['raison'])}" if r.get("raison") else ""))
+    if r.get("conseil"):
+        lignes.append(f"\n➡️ <b>{e(r['conseil'])}</b>")
+    canal = r.get("canal")
     if canal == "email":
-        lignes.append(f"<i>« Valider » envoie votre message (avec l'accroche de l'agent) et votre dossier à "
-                      f"{e(destinataire(cfg, annonce) or contact.get('email', ''))}.</i>")
+        a_qui = e(destinataire(cfg, annonce) or contact.get("email", ""))
+        lignes.append(f"<i>« Envoyer » part à {a_qui}, avec l'accroche de l'agent dans votre message"
+                      + (" et votre dossier PDF." if r.get("joindre_dossier", True) else
+                         ". Le bouton « 📎 avec le dossier » joint aussi le PDF.") + "</i>")
     return "\n".join(lignes)[:telegram.LIMITE]
 
 
@@ -587,14 +654,27 @@ def boutons_rapport(annonce, r: dict) -> telegram.Boutons:
     d = lambda action: donnee_bouton(annonce, action)  # noqa: E731
     canal, contact = r.get("canal"), r.get("contact", {})
     lien = [[("🔗 Ouvrir l'annonce", annonce["lien"])]] if (annonce["lien"] or "").startswith("http") else []
+    if canal == "aucun":  # arnaque probable : pas d'envoi proposé
+        return lien + [[("❌ Pas intéressé (supprimer)", d("refuser"))]]
     if canal == "email":
-        return [[(f"✅ Valider l'envoi à {contact.get('email', '')}"[:60], d("valider"))],
-                [("👀 Voir le message", d("message")), ("❌ Pas intéressé", d("refuser"))]] + lien
+        email = contact.get("email", "")
+        if r.get("joindre_dossier", True):
+            envoi = [[(f"✅ Envoyer message + dossier à {email}"[:64], d("valider"))]]
+        else:  # particulier ou vigilance : d'abord le message seul
+            envoi = [[(f"✅ Envoyer le message à {email}"[:64], d("valider_msg"))],
+                     [("📎 Envoyer avec le dossier", d("valider"))]]
+        lignes = envoi + [[("👀 Voir le message", d("message")), ("❌ Pas intéressé", d("refuser"))]]
+        if contact.get("telephone"):
+            lignes.insert(1, [("📞 Script d'appel", d("script")), ("✅ J'ai appelé", d("appele"))])
+        return lignes + lien
     if canal == "appel":
-        return [[("📞 Script d'appel", d("script")), ("✅ J'ai appelé", d("appele"))],
-                [("📋 Message", d("message")), ("❌ Pas intéressé", d("refuser"))]] + lien
-    return lien + [[("✉️ Je donne l'email", d("demander_email")), ("📋 Message", d("message"))],
-                   [("🌐 Déjà postulé", d("site")), ("❌ Pas intéressé", d("refuser"))]]
+        lignes = [[("📞 Script d'appel", d("script")), ("✅ J'ai appelé", d("appele"))],
+                  [("📋 Message", d("message")), ("❌ Pas intéressé", d("refuser"))]]
+        if contact.get("email"):
+            lignes.append([("✉️ Envoyer le message", d("valider_msg"))])
+        return lignes + lien
+    return lien + [[("📋 Message à copier", d("message")), ("🌐 Déjà postulé", d("site"))],
+                   [("✉️ Je donne l'email", d("demander_email")), ("❌ Pas intéressé", d("refuser"))]]
 
 
 def envoyer_rapports(cfg: Config, db: Stockage) -> None:

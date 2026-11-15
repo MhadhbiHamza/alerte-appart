@@ -58,7 +58,46 @@ ARNAQUE_MOTS = {
         "argent demandé avant la visite",
     r"(?:cles?|clefs?)\s+(?:envoyees?|par\s+(?:la\s+)?(?:poste|courrier|colis))": "clés envoyées par la poste",
     r"airbnb\s+(?:se\s+charge|gere|garantit)|via\s+airbnb": "paiement « via Airbnb »",
+    r"pas\s+de\s+visite|visites?\s+(?:impossible|pas\s+possible)|sans\s+visite|ne\s+peux\s+pas\s+(?:faire\s+)?visiter":
+        "pas de visite possible",
+    r"(?:envoy|transmett|fourni)\w*\s+(?:moi\s+|nous\s+)?(?:votre|vos|une|la)\s+(?:copie|piece|dossier|justificatif|cni|passeport)"
+    r".{0,60}avant\s+(?:la\s+|toute\s+|une\s+)?visite":
+        "documents demandés avant toute visite",
+    r"(?:mon|notre)\s+(?:notaire|avocat|huissier)\s+(?:se\s+charge|gere|vous\s+(?:contactera|enverra))":
+        "intermédiaire « notaire / avocat » qui gère tout",
+    r"(?:virement|payer|verser|regler).{0,50}(?:reserver|bloquer|garantir)\s+(?:le\s+|l')?(?:logement|appartement|bien|studio)":
+        "paiement pour « réserver » le logement",
+    r"(?<![\d+])(?:\+|00)(?!33)(?:2\d{2}|44|32|41|34|39|49|1)[\s.\-]?\d{2,}": "numéro de téléphone étranger",
 }
+# Signaux qui suffisent seuls à classer l'annonce « arnaque probable ».
+SIGNAUX_FORTS = {"paiement par Western Union / MoneyGram", "paiement par coupons ou mandat",
+                 "argent demandé avant la visite", "clés envoyées par la poste", "pas de visite possible",
+                 "paiement pour « réserver » le logement", "paiement « via Airbnb »"}
+PRIX_M2_SUSPECT = {"paris": 18, "banlieue": 12}  # logement entier, € CC / m² : en dessous, très improbable
+
+
+def signaux_arnaque(texte: str, email: str = "", prix=None, surface=None, ville: str = "",
+                    colocation: bool = False) -> List[str]:
+    """Signaux d'arnaque dans un texte d'annonce (alerte ou description complète collée)."""
+    s_texte = zones.simplifier(texte or "")
+    signaux = [raison for motif, raison in ARNAQUE_MOTS.items() if re.search(motif, s_texte)]
+    domaine = (email or "").lower().split("@")[-1]
+    if domaine and any(d in domaine for d in DOMAINES_JETABLES):
+        signaux.append("adresse email jetable")
+    if prix and surface and not colocation:
+        seuil = PRIX_M2_SUSPECT["paris" if (ville or "").startswith("Paris") else "banlieue"]
+        if prix / surface < seuil:
+            signaux.append(f"prix très bas pour le secteur ({prix / surface:.0f} €/m²)")
+    return list(dict.fromkeys(signaux))
+
+
+def niveau_risque(signaux: List[str], risque_ia: int = 0) -> str:
+    """« rouge » (arnaque probable), « orange » (vigilance) ou « vert »."""
+    if set(signaux) & SIGNAUX_FORTS or len(signaux) >= 2 or risque_ia >= 70:
+        return "rouge"
+    if signaux or risque_ia >= 40:
+        return "orange"
+    return "vert"
 DOMAINES_JETABLES = ("yopmail", "mailinator", "guerrillamail", "temp-mail", "tempmail", "10minutemail",
                      "trashmail", "jetable", "sharklasers", "dispostable", "maildrop")
 
@@ -333,13 +372,8 @@ def analyser(annonce, prix_m2_zone: List[float], prioritaire: bool = False,
     note_transports = NOTE_TRANSPORTS.get(ville, 2) + (1 if d.transports_cites else 0)
 
     # --- Arnaques -----------------------------------------------------------------
-    s_texte = zones.simplifier(annonce["texte"] or "")
-    for motif, raison in ARNAQUE_MOTS.items():
-        if re.search(motif, s_texte):
-            arnaque.append(raison)
-    email = (annonce["email_contact"] or "").lower()
-    if any(d in email.split("@")[-1] for d in DOMAINES_JETABLES):
-        arnaque.append("adresse email jetable")
+    arnaque += signaux_arnaque(annonce["texte"] or "", annonce["email_contact"] or "", prix, surface, ville, coloc)
+    arnaque = list(dict.fromkeys(arnaque))
     if arnaque:
         alerte_rouge = True
 

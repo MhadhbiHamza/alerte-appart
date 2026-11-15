@@ -43,11 +43,21 @@ CANAUX = ("email", "appel", "formulaire")
 # Ce que l'IA voit d'une annonce (rien de personnel)
 # --------------------------------------------------------------------------
 
+def texte_complet(annonce) -> str:
+    try:
+        return annonce["texte_complet"] or ""
+    except (IndexError, KeyError):
+        return ""
+
+
 def fiche_annonce(annonce) -> str:
     type_ = "colocation" if annonce["colocation"] else "location (logement entier)"
+    complet = texte_complet(annonce)
+    texte = (f"Description complète de l'annonce (collée par le candidat) :\n{complet[:4000]}" if complet else
+             f"Texte de l'annonce (extrait de l'email d'alerte) :\n{(annonce['texte'] or '')[:1500]}")
     return (f"Site d'origine : {annonce['source']}\nType : {type_}\nVille : {annonce['ville'] or '?'}\n"
             f"Loyer charges comprises : {annonce['prix_cc'] or '?'} €\nSurface : {annonce['surface'] or '?'} m²\n"
-            f"Texte de l'annonce (extrait de l'email d'alerte) :\n{(annonce['texte'] or '')[:1500]}")
+            + texte)
 
 
 # --------------------------------------------------------------------------
@@ -150,15 +160,16 @@ def verifier_contact(brut: dict, textes_lus: list, a_exclure=()) -> dict:
             "confiance": confiance if (email or telephone) else 0.0, "raison": str(brut.get("raison", ""))[:300]}
 
 
-def chercher_contact(cfg: Config, db: Stockage, annonce) -> dict:
+def chercher_contact(cfg: Config, db: Stockage, annonce, agence: str = "") -> dict:
     a_exclure = {cfg.gmail_adresse.lower(), (cfg.email_reponse or "").lower()}
-    textes_lus = [annonce["texte"] or ""]
+    textes_lus = [annonce["texte"] or "", texte_complet(annonce)]
     deja = {"email": annonce["email_contact"] or "", "telephone": annonce["telephone"] or ""}
     if deja["email"]:  # l'annonce donne déjà un email : inutile de chercher
         return verifier_contact({**deja, "agence": "", "source_url": annonce["lien"], "confiance": 0.9,
                                  "raison": "email indiqué dans l'annonce"}, textes_lus + [deja["email"]], a_exclure)
     messages = [{"role": "system", "content": SYSTEME_CONTACT},
                 {"role": "user", "content": fiche_annonce(annonce)
+                 + (f"\nNom de l'agence : {agence}" if agence else "")
                  + (f"\nTéléphone déjà connu : {deja['telephone']}" if deja["telephone"] else "")}]
     recherches = pages = 0
     resultat = {}
@@ -212,6 +223,54 @@ def chercher_contact(cfg: Config, db: Stockage, annonce) -> dict:
 
 
 # --------------------------------------------------------------------------
+# 0. Vérificateur : lit la description complète (arnaque, agence ou particulier, contact)
+# --------------------------------------------------------------------------
+
+SYSTEME_VERIFICATEUR = """Tu vérifies une annonce de location à Paris pour un candidat locataire, avant qu'il postule.
+Réponds UNIQUEMENT en JSON avec :
+"type_annonceur" : "agence", "particulier" ou "inconnu" ;
+"agence" : nom de l'agence s'il apparaît, sinon chaîne vide ;
+"email" et "telephone" : recopiés EXACTEMENT s'ils figurent dans le texte, sinon chaîne vide ;
+"risque_arnaque" : entier de 0 à 100 ;
+"signaux_arnaque" : liste (3 maximum) des éléments suspects RÉELLEMENT présents dans le texte. Signaux
+classiques : prix très inférieur au marché, propriétaire à l'étranger, paiement ou caution avant visite,
+Western Union / mandat / coupons, clés envoyées par la poste, pas de visite possible, pièces d'identité
+demandées avant visite, contact uniquement WhatsApp ou numéro étranger, histoire personnelle pour presser ;
+"questions_visite" : 3 questions utiles maximum ;
+"synthese" : une phrase.
+N'invente rien qui ne soit pas dans le texte."""
+
+
+def verifier_annonce(cfg: Config, db: Stockage, annonce) -> dict:
+    """Analyse la description complète collée par vous. Les règles fixes complètent l'avis de l'IA."""
+    import analyse  # import ici : analyse est déjà chargé par bot
+
+    complet = texte_complet(annonce)
+    brut = ia.demander_json(cfg, SYSTEME_VERIFICATEUR, fiche_annonce(annonce), db=db) if complet else {}
+    try:
+        risque_ia = max(0, min(100, int(brut.get("risque_arnaque", 0) or 0)))
+    except (TypeError, ValueError):
+        risque_ia = 0
+    regles = analyse.signaux_arnaque(" ".join([annonce["texte"] or "", complet]), str(brut.get("email", "")),
+                                     annonce["prix_cc"], annonce["surface"], annonce["ville"] or "",
+                                     bool(annonce["colocation"]))
+    signaux_ia = [str(x)[:150] for x in (brut.get("signaux_arnaque") or []) if x][:3] if risque_ia >= 40 else []
+    type_annonceur = brut.get("type_annonceur") if brut.get("type_annonceur") in ("agence", "particulier") else ""
+    if not type_annonceur:  # sans avis de l'IA : indices simples
+        simple = (complet or annonce["texte"] or "").lower()
+        type_annonceur = ("particulier" if annonce["source"] == "PAP" or "particulier" in simple else
+                          "agence" if re.search(r"\bagence|honoraires|immobili", simple) else "inconnu")
+    return {
+        "type_annonceur": type_annonceur, "agence": str(brut.get("agence", "") or "")[:80],
+        "email": str(brut.get("email", "") or ""), "telephone": str(brut.get("telephone", "") or ""),
+        "risque_ia": risque_ia, "signaux": list(dict.fromkeys(regles + signaux_ia)),
+        "niveau": analyse.niveau_risque(regles, risque_ia),
+        "questions_visite": [str(x)[:200] for x in (brut.get("questions_visite") or []) if x][:3],
+        "synthese": str(brut.get("synthese", "") or "")[:300],
+    }
+
+
+# --------------------------------------------------------------------------
 # 3. Stratège-rédacteur : canal + accroche + script d'appel
 # --------------------------------------------------------------------------
 
@@ -226,17 +285,18 @@ si l'annonce demande de téléphoner ou si c'est un particulier joignable par t�
 à l'endroit où le candidat se présente ; sinon chaîne vide."""
 
 
-def choisir_et_rediger(cfg: Config, db: Stockage, annonce, evaluation: dict, contact: dict) -> dict:
+def choisir_et_rediger(cfg: Config, db: Stockage, annonce, verification: dict, contact: dict) -> dict:
     possibles = [c for c, ok in (("email", contact["email"]), ("appel", contact["telephone"]),
                                  ("formulaire", True)) if ok]
-    demande = (fiche_annonce(annonce) + f"\n\nCanaux POSSIBLES : {', '.join(possibles)}."
-               + f"\nQuestions utiles pour la visite : {'; '.join(evaluation['questions_visite']) or '-'}")
+    demande = (fiche_annonce(annonce) + f"\n\nAnnonceur : {verification['type_annonceur']}."
+               + f"\nCanaux POSSIBLES : {', '.join(possibles)}."
+               + f"\nQuestions utiles pour la visite : {'; '.join(verification['questions_visite']) or '-'}")
     brut = ia.demander_json(cfg, SYSTEME_REDACTEUR, demande, db=db)
     canal = brut.get("canal") if brut.get("canal") in possibles else possibles[0]
-    script = str(brut.get("script_appel", "") or "")[:1200] if canal == "appel" else ""
-    if canal == "appel" and not script:
+    script = str(brut.get("script_appel", "") or "")[:1200] if canal == "appel" or contact["telephone"] else ""
+    if contact["telephone"] and not script:
         script = "Bonjour, j'appelle au sujet de votre annonce de location.\n[PRÉSENTATION]\n" + "\n".join(
-            evaluation["questions_visite"]) + "\nQuand serait-il possible de visiter ?"
+            verification["questions_visite"]) + "\nQuand serait-il possible de visiter ?"
     return {"canal": canal, "raison": str(brut.get("raison", ""))[:300],
             "accroche": str(brut.get("accroche", "") or "")[:600], "script_appel": script}
 
@@ -245,24 +305,73 @@ def choisir_et_rediger(cfg: Config, db: Stockage, annonce, evaluation: dict, con
 # Orchestration
 # --------------------------------------------------------------------------
 
-def executer(cfg: Config, db: Stockage, annonce, evaluation_ia: bool = False) -> dict:
-    """Trouve le contact, choisit le canal et rédige l'accroche. Renvoie le rapport (dict).
+def conseil(verification: dict, contact: dict, canal: str) -> str:
+    """Ce que l'agent vous conseille de faire, en une phrase."""
+    if verification["niveau"] == "rouge":
+        return "Ne postulez pas : cette annonce a les signes d'une arnaque."
+    prudence = " Restez prudent : ne payez rien et n'envoyez pas vos pièces avant d'avoir visité." \
+        if verification["niveau"] == "orange" else ""
+    if verification["type_annonceur"] == "particulier":
+        if canal == "appel":
+            return "Particulier : appelez avec le script, et n'envoyez votre dossier qu'après la visite." + prudence
+        if contact["email"]:
+            return "Particulier : envoyez d'abord le message seul ; le dossier après la visite." + prudence
+    if canal == "email":
+        return "Agence : envoyez votre message et votre dossier." + prudence
+    if canal == "appel":
+        return "Appelez avec le script pour obtenir une visite." + prudence
+    return "Contact introuvable : postulez avec le formulaire du site (message prêt à copier)." + prudence
 
-    Lancé seulement quand vous appuyez sur « Postuler » : vous avez déjà jugé l'annonce, donc
-    l'évaluation par l'IA est sautée par défaut (économie de quota).
+
+def executer(cfg: Config, db: Stockage, annonce, evaluation_ia: bool = False) -> dict:
+    """Vérifie l'annonce, trouve le contact, choisit le canal et rédige. Renvoie le rapport (dict).
+
+    Lancé seulement quand vous appuyez sur « Postuler » (et, si possible, après avoir collé la description).
     """
     import bot  # import ici : bot importe ce module
 
     resume = bot.analyser(cfg, db, annonce)
-    evaluation = (evaluer(cfg, db, annonce, resume) if evaluation_ia else
-                  {"questions_visite": [], "recommandation": "passer" if resume.alertes_arnaque else "candidater"})
-    if resume.alertes_arnaque:
-        contact = {"email": "", "telephone": "", "agence": "", "source_url": "", "confiance": 0.0,
-                   "raison": "annonce suspecte : pas de recherche de contact", "recherches": 0, "pages": 0}
-    else:
-        contact = chercher_contact(cfg, db, annonce)
-    strategie = choisir_et_rediger(cfg, db, annonce, evaluation, contact)
-    return {"evaluation": evaluation if evaluation_ia else {}, "contact": contact, **strategie}
+    verification = verifier_annonce(cfg, db, annonce)
+    # les signaux vus sur l'alerte (ex. prix bien sous la médiane de la zone) comptent aussi
+    import analyse
+    verification["signaux"] = list(dict.fromkeys(resume.alertes_arnaque + verification["signaux"]))
+    ordre = ["vert", "orange", "rouge"]
+    verification["niveau"] = max(verification["niveau"], analyse.niveau_risque(resume.alertes_arnaque),
+                                 key=ordre.index)
+    evaluation = evaluer(cfg, db, annonce, resume) if evaluation_ia else {}
+
+    vide = {"email": "", "telephone": "", "agence": verification["agence"], "source_url": "", "confiance": 0.0,
+            "raison": "", "recherches": 0, "pages": 0}
+    if verification["niveau"] == "rouge":  # arnaque probable : on ne cherche pas, on ne rédige pas
+        contact = {**vide, "raison": "annonce suspecte : pas de recherche de contact"}
+        return {"evaluation": evaluation, "verification": verification, "contact": contact, "canal": "aucun",
+                "raison": "", "accroche": "", "script_appel": "", "conseil": conseil(verification, contact, "aucun")}
+
+    complet = texte_complet(annonce)
+    a_exclure = {cfg.gmail_adresse.lower(), (cfg.email_reponse or "").lower()}
+    # 1. contact écrit dans l'annonce (description collée ou alerte), vérifié mot pour mot
+    textes = [annonce["texte"] or "", complet, annonce["email_contact"] or ""]
+    contact = verifier_contact({
+        "email": verification["email"] or extraction.extraire_email(complet, a_exclure) or annonce["email_contact"] or "",
+        "telephone": verification["telephone"] or extraction.extraire_telephone(complet) or annonce["telephone"] or "",
+        "agence": verification["agence"], "source_url": annonce["lien"], "confiance": 0.9,
+        "raison": "indiqué dans l'annonce"}, textes, a_exclure)
+    contact.update(recherches=0, pages=0)
+    # 2. pas d'email : recherche web, pour une agence (nommée dans la description, ou alerte seule)
+    if not contact["email"] and cfg.tavily_cle and verification["type_annonceur"] != "particulier" and \
+            (verification["agence"] or not complet):
+        trouve = chercher_contact(cfg, db, annonce, verification["agence"])
+        if not trouve["telephone"] and contact["telephone"]:
+            trouve["telephone"] = contact["telephone"]
+        contact = trouve
+    if not (contact["email"] or contact["telephone"]):
+        contact["raison"] = ("particulier sans contact affiché : passez par le site" if
+                             verification["type_annonceur"] == "particulier" else
+                             contact.get("raison") or "aucun nom d'agence ni contact dans l'annonce")
+    strategie = choisir_et_rediger(cfg, db, annonce, verification, contact)
+    return {"evaluation": evaluation, "verification": verification, "contact": contact, **strategie,
+            "conseil": conseil(verification, contact, strategie["canal"]),
+            "joindre_dossier": verification["type_annonceur"] != "particulier" and verification["niveau"] == "vert"}
 
 
 def traiter_en_attente(cfg: Config, db: Stockage, limite: int = 1) -> int:
@@ -284,8 +393,11 @@ def traiter_en_attente(cfg: Config, db: Stockage, limite: int = 1) -> int:
             log.exception("Agent : erreur sur l'annonce #%d", annonce["id"])
             db.maj(annonce["id"], agent_etat="erreur", agent_json=json.dumps({"erreur": str(exc)[:300]}))
             continue
+        rapport["avec_description"] = bool(texte_complet(annonce))
         db.maj(annonce["id"], agent_etat="pret", agent_json=json.dumps(rapport, ensure_ascii=False))
-        log.info("🤖 Agent : rapport prêt pour l'annonce #%d (canal : %s)", annonce["id"], rapport["canal"])
+        log.info("🤖 Agent : avis prêt pour l'annonce #%d (risque : %s, annonceur : %s, canal : %s)", annonce["id"],
+                 rapport.get("verification", {}).get("niveau"), rapport.get("verification", {}).get("type_annonceur"),
+                 rapport["canal"])
     return len(lignes)
 
 

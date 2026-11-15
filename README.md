@@ -53,25 +53,33 @@ Les boutons réagissent en quelques secondes tant que `python main.py` tourne.
 
 ### 🤖 Les agents (facultatif)
 
-Les agents ne travaillent **que quand vous le demandez** : quand vous appuyez sur **✅ Postuler** pour une
-annonce dont l'alerte ne donne pas d'email. Aucune recherche n'est faite sur les annonces qui ne vous
-intéressent pas, ce qui préserve les quotas gratuits. En moins d'une minute, un message
-**🤖 Contact de l'annonceur** arrive sous l'annonce, avec du son :
+Les agents ne travaillent **que quand vous le demandez**, en appuyant sur **✅ Postuler** pour une annonce
+dont l'alerte ne donne pas d'email. Les quotas gratuits ne sont donc pas dépensés sur les annonces qui ne
+vous intéressent pas.
 
-1. **Chercheur de contact** : il prend le contact de l'annonce s'il y en a un. Sinon, il repère le nom de
-   l'agence, fait **lui-même** des recherches web et lit la page « contact » du site de l'agence.
-2. **Stratège-rédacteur** : il choisit le canal (✉️ email, 📞 appel ou 🌐 formulaire du site) et écrit une
-   **accroche** propre à l'annonce, ajoutée à votre message (ou à la place de `{accroche}` dans `templates.md`),
-   plus un **script d'appel** si besoin.
+**Pourquoi coller la description ?** L'email d'alerte ne contient presque rien (prix, surface, lien) : ni le
+nom de l'agence, ni la description, ni le contact. Or l'outil ne lit pas les sites d'annonces (SeLoger, PAP,
+Jinka les bloquent et l'interdisent). Le bot vous demande donc de copier-coller le texte de l'annonce, ce qui
+prend 5 secondes sur le téléphone :
 
-Si l'annonce donne déjà un email, « Postuler » envoie votre dossier tout de suite, sans agent. Appuyer de
-nouveau sur « Postuler » renvoie le contact déjà trouvé, sans nouvelle recherche.
+1. **✅ Postuler** → le bot répond « 📋 Collez ici la description de l'annonce », avec un bouton
+   **🔗 Ouvrir l'annonce**.
+2. Ouvrez l'annonce, copiez tout le texte (description, nom de l'agence, téléphone s'il est affiché), puis
+   collez-le dans le chat.
+3. En moins d'une minute arrive **🤖 Avis de l'agent**, avec du son :
+   - 🛡️ **Arnaque** : 🟢 aucun signal / 🟠 vigilance / 🔴 arnaque probable, avec les raisons. Les règles fixes
+     (Western Union, clés par la poste, pas de visite, argent avant la visite, numéro étranger, prix trop bas…)
+     complètent l'avis de l'IA et gardent le dernier mot.
+   - **Annonceur** : 🏢 agence (avec son nom) ou 👤 particulier.
+   - **Contact** : celui écrit dans l'annonce. Sinon, pour une agence nommée, l'agent le cherche sur le web
+     et sur le site de l'agence.
+   - ➡️ **Le conseil** :
+     - 🔴 → « Ne postulez pas », et aucun bouton d'envoi ;
+     - agence → **message + dossier** ;
+     - particulier → **appel** avec un script, ou **message seul** : le dossier après la visite, pour vous protéger.
 
-| Canal conseillé | Boutons du rapport |
-|---|---|
-| ✉️ email | **✅ Valider l'envoi à agence@…** (rien ne part sans cet appui) · 👀 Voir le message · ❌ |
-| 📞 appel | **📞 Script d'appel** · ✅ J'ai appelé · 📋 Message · ❌ |
-| 🌐 formulaire (rien trouvé) | 🔗 Ouvrir l'annonce · **✉️ Je donne l'email** (vous le collez, le dossier part) · 📋 Message · 🌐 Déjà postulé · ❌ |
+Pas envie de coller ? **⏭ Sans copier** lance l'agent avec l'alerte seule : recherche web, avec une
+vérification limitée.
 
 **Mise en route (gratuit, sans carte bancaire)** :
 1. **Groq** (l'IA) : <https://console.groq.com> → *API Keys* → *Create API Key*. Collez la clé dans `.env` : `LLM_CLE=…`.

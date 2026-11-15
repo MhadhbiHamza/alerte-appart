@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS annonces (
     differee            INTEGER DEFAULT 0,     -- 1 = 🔴 mise de côté pour le résumé du soir
     agent_etat          TEXT,                  -- agents : en_attente / en_cours / pret / fini / erreur
     agent_json          TEXT,                  -- rapport des agents
-    agent_message_id    INTEGER                -- message Telegram du rapport
+    agent_message_id    INTEGER,               -- message Telegram du rapport
+    texte_complet       TEXT                   -- description complète collée par vous dans Telegram
 );
 CREATE TABLE IF NOT EXISTS etat (              -- petites valeurs à retenir entre deux lancements
     cle    TEXT PRIMARY KEY,
@@ -67,11 +68,11 @@ NOUVELLES_COLONNES = {
     "message_id": "INTEGER", "statut": "TEXT", "candidature": "TEXT", "envoye_le": "TEXT",
     "texte": "TEXT", "photos": "TEXT", "verdict": "TEXT", "note": "REAL", "essai": "INTEGER DEFAULT 0",
     "album_ids": "TEXT", "differee": "INTEGER DEFAULT 0",
-    "agent_etat": "TEXT", "agent_json": "TEXT", "agent_message_id": "INTEGER",
+    "agent_etat": "TEXT", "agent_json": "TEXT", "agent_message_id": "INTEGER", "texte_complet": "TEXT",
 }
 CHAMPS_MODIFIABLES = {"notifiee_le", "message_id", "statut", "candidature", "envoye_le", "brouillon", "verdict", "note",
                       "album_ids", "email_contact", "differee", "agent_etat", "agent_json",
-                      "agent_message_id"}
+                      "agent_message_id", "texte_complet"}
 
 
 def maintenant() -> str:
