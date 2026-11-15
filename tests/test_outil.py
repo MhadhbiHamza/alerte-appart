@@ -950,6 +950,20 @@ class TestOutilsAgents(unittest.TestCase):
             self.assertEqual(main.ia.discuter(cfg, [{"role": "user", "content": "x"}])["content"], "OK")
         dort.assert_called_once_with(2.0)
 
+    def test_modele_retire_propose_les_disponibles(self):
+        cfg = mock.Mock(llm_cle="k", llm_url="https://x", llm_modele="ancien-modele", llm_max_jour=10)
+        refus = reponse_http(statut=404, texte='{"error":{"code":"model_not_found","message":"The model does not exist"}}')
+        liste = reponse_http({"data": [{"id": "whisper-large-v3"}, {"id": "llama-3.1-8b-instant"},
+                                       {"id": "openai/gpt-oss-120b"}, {"id": "qwen/qwen3.6-27b"}]})
+        with mock.patch.object(main.ia._session, "post", return_value=refus), \
+             mock.patch.object(main.ia._session, "get", return_value=liste):
+            with self.assertRaises(main.ia.IAIndisponible) as ctx:
+                main.ia.discuter(cfg, [{"role": "user", "content": "x"}])
+        message = str(ctx.exception)
+        self.assertIn("LLM_MODELE", message)
+        self.assertIn("openai/gpt-oss-120b, qwen/qwen3.6-27b, llama-3.1-8b-instant", message)
+        self.assertNotIn("whisper", message)
+
     def test_cle_jamais_dans_les_erreurs(self):
         cfg = mock.Mock(llm_cle="SECRET-CLE", llm_url="https://x", llm_modele="m", llm_max_jour=10)
         with mock.patch.object(main.ia._session, "post",

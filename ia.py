@@ -1,6 +1,6 @@
 """Client d'IA générique, compatible avec l'API « OpenAI » (Groq, Gemini, OpenRouter, Mistral…).
 
-Par défaut : Groq, gratuit (https://console.groq.com → API Keys), modèle Llama 3.3 70B.
+Par défaut : Groq, gratuit (https://console.groq.com → API Keys), modèle openai/gpt-oss-120b.
 Pour changer de plateforme, il suffit de modifier LLM_URL, LLM_MODELE et LLM_CLE dans .env.
 
 Ce module n'envoie que ce qu'on lui donne : les agents (agents.py) ne lui passent jamais
@@ -62,10 +62,31 @@ def discuter(cfg, messages: List[dict], outils: Optional[list] = None, format_js
             log.info("IA : limite atteinte, nouvel essai dans %.0f s", attente)
             time.sleep(attente)
             continue
+        if r.status_code == 404 and "model" in r.text.lower():
+            # Les plateformes retirent régulièrement des modèles : on dit lesquels sont disponibles.
+            proposes = ", ".join(modeles_disponibles(cfg)[:8]) or "voir la console de votre plateforme"
+            raise IAIndisponible(f"le modèle « {cfg.llm_modele} » n'existe plus ou n'est pas accessible. "
+                                 f"Changez LLM_MODELE dans .env. Modèles disponibles : {proposes}")
         if not r.ok:
             raise IAIndisponible(f"le service d'IA a refusé : {r.status_code} {r.text[:200]}")
         return r.json()["choices"][0]["message"]
     raise IAIndisponible("limite de requêtes atteinte")
+
+
+# Ordre de préférence pour suggérer un remplaçant (grands modèles qui savent utiliser des outils).
+PREFERES = ("gpt-oss-120b", "qwen", "llama-4", "llama", "gpt-oss", "gemini", "mistral")
+
+
+def modeles_disponibles(cfg) -> List[str]:
+    """Modèles accessibles avec votre clé, les plus adaptés aux agents en premier."""
+    try:
+        r = _session.get(f"{cfg.llm_url}/models", timeout=20, headers={"Authorization": f"Bearer {cfg.llm_cle}"})
+        ids = [m.get("id", "") for m in r.json().get("data", [])] if r.ok else []
+    except (requests.RequestException, ValueError):
+        return []
+    rang = lambda nom: next((i for i, p in enumerate(PREFERES) if p in nom.lower()), len(PREFERES))  # noqa: E731
+    exclus = ("whisper", "tts", "guard", "embed", "vision", "audio", "orpheus", "playai")
+    return sorted((i for i in ids if i and not any(x in i.lower() for x in exclus)), key=lambda n: (rang(n), n))
 
 
 def demander_json(cfg, systeme: str, utilisateur: str, db=None) -> dict:

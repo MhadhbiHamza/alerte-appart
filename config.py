@@ -45,7 +45,7 @@ class Config:
     imap_idle: bool = True
     # Agents (IA gratuite compatible OpenAI + recherche Tavily). Sans clés : désactivés.
     llm_url: str = "https://api.groq.com/openai/v1"
-    llm_modele: str = "llama-3.3-70b-versatile"
+    llm_modele: str = "openai/gpt-oss-120b"
     llm_cle: str = ""
     tavily_cle: str = ""
     agents: bool = True
@@ -138,7 +138,7 @@ def charger_config() -> Config:
         heure_bilan_matin=_heure(g("HEURE_BILAN_MATIN", "8")),
         imap_idle=g("IMAP_IDLE", "1").strip() not in ("0", "non", "false", ""),
         llm_url=(g("LLM_URL", "") or "https://api.groq.com/openai/v1").strip().rstrip("/"),
-        llm_modele=(g("LLM_MODELE", "") or "llama-3.3-70b-versatile").strip(),
+        llm_modele=(g("LLM_MODELE", "") or "openai/gpt-oss-120b").strip(),
         llm_cle=g("LLM_CLE", "").strip(),
         tavily_cle=g("TAVILY_CLE", "").strip(),
         agents=g("AGENTS", "1").strip() not in ("0", "non", "false"),
