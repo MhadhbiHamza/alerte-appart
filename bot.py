@@ -366,7 +366,8 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
         _remplacer_boutons(cfg, [message_clique], "📝 Brouillon créé dans Gmail")
         telegram.repondre_clic(token, clic["id"], "Brouillon créé : relisez-le dans Gmail puis envoyez-le.")
 
-    elif action == "postuler" and destinataire(cfg, annonce):
+    elif action == "postuler" and (annonce["email_contact"] or (annonce["essai"] and not cfg.agents_actifs)):
+        # L'annonce donne l'email (ou essai sans agent) : envoi direct.
         ok, reponse = envoyer_dossier(cfg, db, annonce, [message_clique])
         telegram.repondre_clic(token, clic["id"], reponse, alerte=not ok)
 

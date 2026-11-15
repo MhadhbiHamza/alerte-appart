@@ -936,6 +936,22 @@ class TestAgents(unittest.TestCase):
         main.boucle(self.cfg, self.db, une_fois=True)
         self.assertTrue(all(r["agent_etat"] is None for r in self.db.db.execute("SELECT agent_etat FROM annonces")))
 
+    def test_mode_essai_lance_aussi_l_agent(self):
+        self.preparer()
+        main.boucle(self.cfg, self.db, une_fois=True)
+        self.db.db.execute("UPDATE annonces SET essai=1")
+        self.db.db.commit()
+        self.postuler()
+        self.m["envoyer_email"].assert_not_called()          # l'agent cherche d'abord
+        self.assertEqual(self.db.annonce(1)["agent_etat"], "en_attente")
+        main.agents.traiter_en_attente(self.cfg, self.db)
+        main.bot.envoyer_rapports(self.cfg, self.db)
+        self.clics = [clic(501, self.d("valider", 1))]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        args = self.m["envoyer_email"].call_args[0]
+        self.assertEqual(args[2], "perso@moi.fr")            # essai : vers vous, jamais l'agence trouvée
+        self.assertTrue(args[3].startswith("[ESSAI] "))
+
     def test_canal_appel_et_script(self):
         self.preparer(canal="appel")
         self.emails = [("INBOX:1:1", email_de("PAP <alerte@pap.fr>", texte=(
