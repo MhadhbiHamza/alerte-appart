@@ -53,22 +53,25 @@ Les boutons réagissent en quelques secondes tant que `python main.py` tourne.
 
 ### 🤖 Les agents (facultatif)
 
-Pour chaque annonce 🟢 / 🟡, trois agents travaillent en arrière-plan, puis postent un **🤖 Rapport de
-l'agent** en réponse à la carte, en général moins d'une minute après :
+Les agents ne travaillent **que quand vous le demandez** : quand vous appuyez sur **✅ Postuler** pour une
+annonce dont l'alerte ne donne pas d'email. Aucune recherche n'est faite sur les annonces qui ne vous
+intéressent pas, ce qui préserve les quotas gratuits. En moins d'une minute, un message
+**🤖 Contact de l'annonceur** arrive sous l'annonce, avec du son :
 
-1. **Évaluateur** : intérêt /5, synthèse, points forts, risques, questions à poser à la visite, et une
-   recommandation (candidater / à vérifier / passer).
-2. **Chercheur de contact** : il prend le contact de l'annonce s'il y en a un. Sinon, il repère le nom de
+1. **Chercheur de contact** : il prend le contact de l'annonce s'il y en a un. Sinon, il repère le nom de
    l'agence, fait **lui-même** des recherches web et lit la page « contact » du site de l'agence.
-3. **Stratège-rédacteur** : il choisit le canal (✉️ email, 📞 appel ou 🌐 formulaire du site) et écrit une
+2. **Stratège-rédacteur** : il choisit le canal (✉️ email, 📞 appel ou 🌐 formulaire du site) et écrit une
    **accroche** propre à l'annonce, ajoutée à votre message (ou à la place de `{accroche}` dans `templates.md`),
    plus un **script d'appel** si besoin.
+
+Si l'annonce donne déjà un email, « Postuler » envoie votre dossier tout de suite, sans agent. Appuyer de
+nouveau sur « Postuler » renvoie le contact déjà trouvé, sans nouvelle recherche.
 
 | Canal conseillé | Boutons du rapport |
 |---|---|
 | ✉️ email | **✅ Valider l'envoi à agence@…** (rien ne part sans cet appui) · 👀 Voir le message · ❌ |
 | 📞 appel | **📞 Script d'appel** · ✅ J'ai appelé · 📋 Message · ❌ |
-| 🌐 formulaire | 🔗 Ouvrir l'annonce · 📋 Message · 🌐 Déjà postulé · ❌ |
+| 🌐 formulaire (rien trouvé) | 🔗 Ouvrir l'annonce · **✉️ Je donne l'email** (vous le collez, le dossier part) · 📋 Message · 🌐 Déjà postulé · ❌ |
 
 **Mise en route (gratuit, sans carte bancaire)** :
 1. **Groq** (l'IA) : <https://console.groq.com> → *API Keys* → *Create API Key*. Collez la clé dans `.env` : `LLM_CLE=…`.
@@ -445,7 +448,7 @@ Pour repartir de zéro, arrêtez l'outil et supprimez `annonces.db`.
 | `gmail.py` | lecture des alertes (IMAP), brouillons, envoi des candidatures après « Postuler » (SMTP) |
 | `extraction.py` | découpage des emails en annonces, extraction prix/surface/contact, filtre |
 | `analyse.py` | résumé et verdict de chaque annonce (prix au m², frais, budget, transports…) |
-| `agents.py` | les agents : évaluation, recherche du contact, canal, accroche (en arrière-plan) |
+| `agents.py` | les agents (sur demande) : recherche du contact, canal, accroche, en arrière-plan |
 | `ia.py` / `recherche.py` | client IA (Groq ou compatible OpenAI) ; recherche Tavily et lecture des sites d'agences |
 | `zones.py` | vos communes et arrondissements : reconnaissance de la ville et des quartiers |
 | `stockage.py` | base SQLite `annonces.db` (doublons, état des notifications et relances) |

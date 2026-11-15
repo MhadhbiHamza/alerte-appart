@@ -213,19 +213,21 @@ def notifier_annonces(cfg: Config, db: Stockage) -> None:
             log.info("Annonce #%d mise de côté (%s %s/5)", annonce["id"], resume.verdict, resume.note_globale)
             continue
         envoyer_carte(cfg, db, db.annonce(annonce["id"]), resume, silencieux=not resume.verdict.startswith("🟢"))
-        mettre_en_file_agent(cfg, db, db.annonce(annonce["id"]), resume)
         log.info("Notification envoyée pour l'annonce #%d (%s)", annonce["id"], resume.verdict)
 
 
-NIVEAUX = {"🟢": "vert", "🟡": "jaune", "🔴": "rouge"}
+def lancer_agent(cfg: Config, db: Stockage, annonce) -> str:
+    """Vous voulez postuler mais l'alerte ne donne pas d'email : l'agent cherche le contact.
 
-
-def mettre_en_file_agent(cfg: Config, db: Stockage, annonce, resume) -> None:
-    """Confie l'annonce aux agents si elle est du bon niveau (AGENTS_NIVEAUX) et pas déjà traitée."""
-    if not cfg.agents_actifs or annonce["agent_etat"]:
-        return
-    if annonce["essai"] or NIVEAUX.get(resume.verdict[:1], "") in cfg.agents_niveaux:
-        db.maj(annonce["id"], agent_etat="en_attente")
+    Renvoie le message à afficher. Les agents ne travaillent QUE sur demande (quotas gratuits limités).
+    """
+    if annonce["agent_etat"] in ("en_attente", "en_cours"):
+        return "🤖 Recherche déjà en cours, réponse sous l'annonce dans une minute environ."
+    if annonce["agent_etat"] in ("fini", "pret") and rapport_agent(annonce).get("contact"):
+        db.maj(annonce["id"], agent_etat="pret")  # on renvoie le rapport déjà fait, sans rien dépenser
+        return "🤖 Voici à nouveau le contact trouvé."
+    db.maj(annonce["id"], agent_etat="en_attente")
+    return "🤖 Je cherche le contact de l'annonceur : réponse sous l'annonce dans une minute environ."
 
 
 # --------------------------------------------------------------------------
@@ -301,7 +303,6 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
     if action == "afficher":  # depuis le résumé du soir : la 🔴 mise de côté
         resume = analyser(cfg, db, annonce)
         envoyer_carte(cfg, db, annonce, resume, silencieux=True)
-        mettre_en_file_agent(cfg, db, db.annonce(annonce["id"]), resume)
         telegram.repondre_clic(token, clic["id"], "Annonce affichée.")
         return
 
@@ -369,8 +370,12 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
         ok, reponse = envoyer_dossier(cfg, db, annonce, [message_clique])
         telegram.repondre_clic(token, clic["id"], reponse, alerte=not ok)
 
-    elif action == "postuler":
-        # Pas d'email dans l'alerte : on vous le demande. Votre réponse déclenche l'envoi.
+    elif action == "postuler" and cfg.agents_actifs:
+        # Pas d'email dans l'alerte : l'agent le cherche (recherche web, site de l'agence).
+        telegram.repondre_clic(token, clic["id"], lancer_agent(cfg, db, annonce), alerte=True)
+
+    elif action in ("postuler", "demander_email"):
+        # Pas d'agent (ou rien trouvé) : on vous demande l'email. Votre réponse déclenche l'envoi.
         demande = telegram.demander_reponse(
             token, cfg.telegram_chat_id,
             f"✉️ <b>Email de l'agence ?</b>\n{telegram.echapper(annonce['ville'] or '')} · "
@@ -534,8 +539,10 @@ def texte_rapport(cfg: Config, annonce, r: dict) -> str:
     e = telegram.echapper
     ev, contact = r.get("evaluation", {}), r.get("contact", {})
     reco = {"candidater": "✅ candidater", "a_verifier": "🔎 à vérifier", "passer": "⛔ passer"}
-    lignes = [f"🤖 <b>Rapport de l'agent</b> — intérêt {ev.get('interet', '?')}/5 · "
-              f"{reco.get(ev.get('recommandation'), '?')}"]
+    titre = f"🤖 <b>Contact de l'annonceur</b> — {e(annonce['ville'] or '')} · {annonce['prix_cc']} €"
+    if ev:
+        titre += f"\nIntérêt {ev.get('interet', '?')}/5 · {reco.get(ev.get('recommandation'), '?')}"
+    lignes = [titre]
     if ev.get("synthese"):
         lignes.append(e(ev["synthese"]))
     if ev.get("points_forts"):
@@ -576,8 +583,8 @@ def boutons_rapport(annonce, r: dict) -> telegram.Boutons:
     if canal == "appel":
         return [[("📞 Script d'appel", d("script")), ("✅ J'ai appelé", d("appele"))],
                 [("📋 Message", d("message")), ("❌ Pas intéressé", d("refuser"))]] + lien
-    return lien + [[("📋 Message", d("message")), ("🌐 Déjà postulé", d("site"))],
-                   [("❌ Pas intéressé", d("refuser"))]]
+    return lien + [[("✉️ Je donne l'email", d("demander_email")), ("📋 Message", d("message"))],
+                   [("🌐 Déjà postulé", d("site")), ("❌ Pas intéressé", d("refuser"))]]
 
 
 def envoyer_rapports(cfg: Config, db: Stockage) -> None:
@@ -588,6 +595,6 @@ def envoyer_rapports(cfg: Config, db: Stockage) -> None:
             db.maj(annonce["id"], agent_etat="fini")
             continue
         message_id = telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, texte_rapport(cfg, annonce, r),
-                                      boutons=boutons_rapport(annonce, r), silencieux=True,
+                                      boutons=boutons_rapport(annonce, r), silencieux=False,
                                       repondre_a=annonce["message_id"])
         db.maj(annonce["id"], agent_etat="fini", agent_message_id=message_id)

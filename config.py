@@ -49,7 +49,6 @@ class Config:
     llm_cle: str = ""
     tavily_cle: str = ""
     agents: bool = True
-    agents_niveaux: frozenset = frozenset({"vert", "jaune"})
     llm_max_jour: int = 300
     recherches_max_jour: int = 30
 
@@ -142,7 +141,6 @@ def charger_config() -> Config:
         llm_cle=g("LLM_CLE", "").strip(),
         tavily_cle=g("TAVILY_CLE", "").strip(),
         agents=g("AGENTS", "1").strip() not in ("0", "non", "false"),
-        agents_niveaux=frozenset(x.lower() for x in _liste(g("AGENTS_NIVEAUX", "vert,jaune"))),
         llm_max_jour=int(g("LLM_MAX_JOUR", "300") or 300),
         recherches_max_jour=int(g("RECHERCHES_MAX_JOUR", "30") or 30),
     )

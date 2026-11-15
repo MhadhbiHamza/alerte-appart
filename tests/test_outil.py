@@ -848,11 +848,30 @@ class TestAgents(unittest.TestCase):
             pt.start()
             self.addCleanup(pt.stop)
 
+    def postuler(self, n=101):
+        """Vous appuyez sur « ✅ Postuler » : c'est ce qui déclenche l'agent."""
+        self.clics = [clic(n, self.d("postuler", 1))]
+        main.traiter_boutons(self.cfg, self.db, 0)
+
+    def test_rien_ne_tourne_sans_postuler(self):
+        self.preparer()
+        main.boucle(self.cfg, self.db, une_fois=True)
+        main.agents.traiter_en_attente(self.cfg, self.db)
+        self.assertIsNone(self.db.annonce(1)["agent_etat"])
+        self.assertEqual(self.requetes_ia, [])          # aucune requête IA ni recherche dépensée
+        self.assertEqual(self.pages_lues, [])
+
     def test_parcours_agent_email(self):
         self.preparer()
         main.boucle(self.cfg, self.db, une_fois=True)
+        self.postuler()
         self.assertEqual(self.db.annonce(1)["agent_etat"], "en_attente")
+        self.assertIn("Je cherche le contact", self.m["repondre_clic"].call_args[0][2])
+        self.m["demander_reponse"].assert_not_called()   # plus besoin de donner l'email vous-même
         self.assertEqual(main.agents.traiter_en_attente(self.cfg, self.db), 1)
+        # pas d'évaluation par l'IA : seulement la recherche du contact et la rédaction
+        systemes = [r["messages"][0]["content"] for r in self.requetes_ia]
+        self.assertNotIn(main.agents.SYSTEME_EVALUATEUR, systemes)
         rapport = main.bot.rapport_agent(self.db.annonce(1))
         self.assertEqual(rapport["contact"]["email"], "contact@agence-lumiere.fr")
         self.assertEqual(rapport["canal"], "email")
@@ -861,16 +880,23 @@ class TestAgents(unittest.TestCase):
         # le rapport part en réponse à la carte
         main.bot.envoyer_rapports(self.cfg, self.db)
         texte, options = self.envoyes()[-1][0][2], self.envoyes()[-1][1]
-        self.assertIn("🤖 <b>Rapport de l'agent</b>", texte)
+        self.assertIn("🤖 <b>Contact de l'annonceur</b>", texte)
         self.assertIn("contact@agence-lumiere.fr", texte)
         self.assertEqual(options["repondre_a"], self.db.annonce(1)["message_id"])
         self.assertEqual(options["boutons"][0][0][1], self.d("valider", 1))
         self.assertEqual(self.db.annonce(1)["agent_etat"], "fini")
         main.bot.envoyer_rapports(self.cfg, self.db)          # pas renvoyé
-        self.assertEqual(len([c for c in self.envoyes() if "Rapport" in c[0][2]]), 1)
+        self.assertEqual(len([c for c in self.envoyes() if "Contact de l'annonceur" in c[0][2]]), 1)
+        self.assertFalse(options["silencieux"])          # c'est la réponse à votre demande : avec son
+        # ré-appuyer sur Postuler ne relance pas de recherche : le rapport est renvoyé tel quel
+        nb_ia = len(self.requetes_ia)
+        self.postuler(102)
+        self.assertEqual(self.db.annonce(1)["agent_etat"], "pret")
+        self.assertEqual(len(self.requetes_ia), nb_ia)
+        main.bot.envoyer_rapports(self.cfg, self.db)
         # rien n'est envoyé sans « Valider »
         self.m["envoyer_email"].assert_not_called()
-        self.clics = [clic(1, self.d("valider", 1)), clic(2, self.d("valider", 1))]
+        self.clics = [clic(201, self.d("valider", 1)), clic(202, self.d("valider", 1))]
         main.traiter_boutons(self.cfg, self.db, 0)
         self.m["envoyer_email"].assert_called_once()
         a_qui, corps = self.m["envoyer_email"].call_args[0][2], self.m["envoyer_email"].call_args[0][4]
@@ -882,6 +908,7 @@ class TestAgents(unittest.TestCase):
     def test_aucune_donnee_personnelle_envoyee_a_l_ia(self):
         self.preparer()
         main.boucle(self.cfg, self.db, une_fois=True)
+        self.postuler()
         main.agents.traiter_en_attente(self.cfg, self.db)
         tout = json.dumps(self.requetes_ia, ensure_ascii=False)
         for secret in ("42 000", "perso@moi.fr", "moi@gmail.com", "Professionnel en CDI", "dossier.pdf"):
@@ -891,6 +918,7 @@ class TestAgents(unittest.TestCase):
     def test_email_invente_rejete(self):
         self.preparer(email_donne_par_ia="invente@nulle-part.fr")
         main.boucle(self.cfg, self.db, une_fois=True)
+        self.postuler()
         main.agents.traiter_en_attente(self.cfg, self.db)
         rapport = main.bot.rapport_agent(self.db.annonce(1))
         self.assertEqual(rapport["contact"]["email"], "")
@@ -898,6 +926,11 @@ class TestAgents(unittest.TestCase):
         main.bot.envoyer_rapports(self.cfg, self.db)
         boutons = [d for ligne in self.envoyes()[-1][1]["boutons"] for _, d in ligne]
         self.assertNotIn(self.d("valider", 1), boutons)
+        # rien trouvé : « Je donne l'email » propose de le donner vous-même
+        self.assertIn(self.d("demander_email", 1), boutons)
+        self.clics = [clic(301, self.d("demander_email", 1))]
+        main.traiter_boutons(self.cfg, self.db, 0)
+        self.m["demander_reponse"].assert_called_once()
 
     def test_agents_desactives_sans_cle(self):
         main.boucle(self.cfg, self.db, une_fois=True)
@@ -909,12 +942,13 @@ class TestAgents(unittest.TestCase):
             "Studio 22 m² - Paris 14e (75014) 780 € CC, particulier, merci d'appeler le 06 12 34 56 78\n"
             "https://www.pap.fr/annonces/appel")))]
         main.boucle(self.cfg, self.db, une_fois=True)
+        self.postuler()
         main.agents.traiter_en_attente(self.cfg, self.db)
         rapport = main.bot.rapport_agent(self.db.annonce(1))
         self.assertEqual(rapport["contact"]["telephone"], "06 12 34 56 78")
         self.assertEqual(rapport["canal"], "appel")
         main.bot.envoyer_rapports(self.cfg, self.db)
-        self.clics = [clic(1, self.d("script", 1)), clic(2, self.d("appele", 1))]
+        self.clics = [clic(401, self.d("script", 1)), clic(402, self.d("appele", 1))]
         main.traiter_boutons(self.cfg, self.db, 0)
         self.assertIn("Script d'appel", self.envoyes()[-1][0][2])
         self.assertEqual(self.db.annonce(1)["statut"], "appelé")
@@ -923,6 +957,7 @@ class TestAgents(unittest.TestCase):
         self.preparer()
         self.cfg.llm_max_jour = 1
         main.boucle(self.cfg, self.db, une_fois=True)
+        self.postuler()
         with self.assertRaises(main.ia.IAIndisponible):
             main.agents.traiter_en_attente(self.cfg, self.db)
         self.assertEqual(self.db.annonce(1)["agent_etat"], "en_attente")   # réessayé plus tard

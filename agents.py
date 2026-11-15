@@ -1,8 +1,9 @@
-"""Agents : évaluer l'annonce, trouver le contact de l'annonceur, choisir le canal, rédiger.
+"""Agents : trouver le contact de l'annonceur, choisir le canal, rédiger (et, en option, évaluer).
 
-Pour chaque annonce intéressante (🟢 / 🟡 par défaut), 3 étapes, chacune décidée par l'IA :
+Ils ne travaillent QUE quand vous appuyez sur « ✅ Postuler » pour une annonce sans email
+(les offres gratuites d'IA et de recherche sont limitées). Étapes, chacune décidée par l'IA :
 
-  1. Évaluateur  : intérêt sur 5, synthèse, risques, questions à poser à la visite.
+  1. Évaluateur  : (désactivé par défaut) intérêt sur 5, synthèse, risques, questions de visite.
   2. Chercheur   : trouve l'email / le téléphone (dans l'annonce, via une recherche web,
                    sur le site de l'agence). Il choisit lui-même ses recherches.
   3. Stratège-rédacteur : choisit le canal (email, appel, formulaire du site) et écrit une
@@ -244,19 +245,24 @@ def choisir_et_rediger(cfg: Config, db: Stockage, annonce, evaluation: dict, con
 # Orchestration
 # --------------------------------------------------------------------------
 
-def executer(cfg: Config, db: Stockage, annonce) -> dict:
-    """Fait travailler les 3 agents sur une annonce et renvoie leur rapport (dict)."""
+def executer(cfg: Config, db: Stockage, annonce, evaluation_ia: bool = False) -> dict:
+    """Trouve le contact, choisit le canal et rédige l'accroche. Renvoie le rapport (dict).
+
+    Lancé seulement quand vous appuyez sur « Postuler » : vous avez déjà jugé l'annonce, donc
+    l'évaluation par l'IA est sautée par défaut (économie de quota).
+    """
     import bot  # import ici : bot importe ce module
 
     resume = bot.analyser(cfg, db, annonce)
-    evaluation = evaluer(cfg, db, annonce, resume)
-    if evaluation["recommandation"] == "passer" and resume.alertes_arnaque:
+    evaluation = (evaluer(cfg, db, annonce, resume) if evaluation_ia else
+                  {"questions_visite": [], "recommandation": "passer" if resume.alertes_arnaque else "candidater"})
+    if resume.alertes_arnaque:
         contact = {"email": "", "telephone": "", "agence": "", "source_url": "", "confiance": 0.0,
                    "raison": "annonce suspecte : pas de recherche de contact", "recherches": 0, "pages": 0}
     else:
         contact = chercher_contact(cfg, db, annonce)
     strategie = choisir_et_rediger(cfg, db, annonce, evaluation, contact)
-    return {"evaluation": evaluation, "contact": contact, **strategie}
+    return {"evaluation": evaluation if evaluation_ia else {}, "contact": contact, **strategie}
 
 
 def traiter_en_attente(cfg: Config, db: Stockage, limite: int = 1) -> int:
