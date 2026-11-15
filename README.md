@@ -51,6 +51,47 @@ Après un appui, les boutons sont remplacés par la décision (ex. « ✅ Dossie
 Seuls les appuis venant de **votre** compte Telegram (`TELEGRAM_CHAT_ID`) sont pris en compte.
 Les boutons réagissent en quelques secondes tant que `python main.py` tourne.
 
+### 🤖 Les agents (facultatif)
+
+Pour chaque annonce 🟢 / 🟡, trois agents travaillent en arrière-plan, puis postent un **🤖 Rapport de
+l'agent** en réponse à la carte, en général moins d'une minute après :
+
+1. **Évaluateur** : intérêt /5, synthèse, points forts, risques, questions à poser à la visite, et une
+   recommandation (candidater / à vérifier / passer).
+2. **Chercheur de contact** : il prend le contact de l'annonce s'il y en a un. Sinon, il repère le nom de
+   l'agence, fait **lui-même** des recherches web et lit la page « contact » du site de l'agence.
+3. **Stratège-rédacteur** : il choisit le canal (✉️ email, 📞 appel ou 🌐 formulaire du site) et écrit une
+   **accroche** propre à l'annonce, ajoutée à votre message (ou à la place de `{accroche}` dans `templates.md`),
+   plus un **script d'appel** si besoin.
+
+| Canal conseillé | Boutons du rapport |
+|---|---|
+| ✉️ email | **✅ Valider l'envoi à agence@…** (rien ne part sans cet appui) · 👀 Voir le message · ❌ |
+| 📞 appel | **📞 Script d'appel** · ✅ J'ai appelé · 📋 Message · ❌ |
+| 🌐 formulaire | 🔗 Ouvrir l'annonce · 📋 Message · 🌐 Déjà postulé · ❌ |
+
+**Mise en route (gratuit, sans carte bancaire)** :
+1. **Groq** (l'IA) : <https://console.groq.com> → *API Keys* → *Create API Key*. Collez la clé dans `.env` : `LLM_CLE=…`.
+2. **Tavily** (la recherche web) : <https://app.tavily.com> → copiez la clé : `TAVILY_CLE=…`.
+3. `python main.py --test` doit afficher « ✅ IA joignable » et « ✅ Recherche web (Tavily) joignable ».
+
+**Ce qui part chez Groq et Tavily** : uniquement le texte de l'annonce et les infos de l'agence. **Jamais**
+votre salaire, votre modèle de message, vos adresses email ni votre dossier. L'accroche est ajoutée à votre
+message sur votre ordinateur.
+
+**Garde-fous** :
+- un email ou un téléphone n'est retenu que s'il figure **mot pour mot** dans une page réellement lue
+  (l'IA ne peut pas en inventer) ;
+- les sites d'annonces (SeLoger, PAP, Jinka, Leboncoin, Bien'ici…) ne sont **jamais** lus ;
+- `robots.txt` des sites d'agences est respecté ;
+- les annonces suspectes ne sont jamais « à candidater », et « Valider » demande un 2e appui.
+
+**Limites** : un modèle gratuit se trompe parfois (relisez le rapport). Le contact n'est pas toujours trouvé,
+surtout quand l'alerte ne cite pas l'agence. Il y a aussi des quotas par jour (`LLM_MAX_JOUR=300`,
+`RECHERCHES_MAX_JOUR=30` ≈ 900 recherches par mois, sous les 1 000 gratuites de Tavily) : au-delà, les agents
+attendent le lendemain. `/stats` affiche ce qui a été utilisé aujourd'hui. Pour couper les agents : `AGENTS=0`.
+Pour une autre IA gratuite compatible OpenAI (Gemini, OpenRouter…) : changez `LLM_URL`, `LLM_MODELE` et `LLM_CLE`.
+
 ### Les commandes du bot
 
 Tapez-les dans la conversation avec votre bot (elles apparaissent aussi dans le menu « / ») :
@@ -404,6 +445,8 @@ Pour repartir de zéro, arrêtez l'outil et supprimez `annonces.db`.
 | `gmail.py` | lecture des alertes (IMAP), brouillons, envoi des candidatures après « Postuler » (SMTP) |
 | `extraction.py` | découpage des emails en annonces, extraction prix/surface/contact, filtre |
 | `analyse.py` | résumé et verdict de chaque annonce (prix au m², frais, budget, transports…) |
+| `agents.py` | les agents : évaluation, recherche du contact, canal, accroche (en arrière-plan) |
+| `ia.py` / `recherche.py` | client IA (Groq ou compatible OpenAI) ; recherche Tavily et lecture des sites d'agences |
 | `zones.py` | vos communes et arrondissements : reconnaissance de la ville et des quartiers |
 | `stockage.py` | base SQLite `annonces.db` (doublons, état des notifications et relances) |
 | `modele.py` | remplissage de `templates.md` |

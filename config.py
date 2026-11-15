@@ -43,6 +43,19 @@ class Config:
     heure_resume_soir: Optional[int] = 21
     heure_bilan_matin: Optional[int] = 8
     imap_idle: bool = True
+    # Agents (IA gratuite compatible OpenAI + recherche Tavily). Sans clés : désactivés.
+    llm_url: str = "https://api.groq.com/openai/v1"
+    llm_modele: str = "llama-3.3-70b-versatile"
+    llm_cle: str = ""
+    tavily_cle: str = ""
+    agents: bool = True
+    agents_niveaux: frozenset = frozenset({"vert", "jaune"})
+    llm_max_jour: int = 300
+    recherches_max_jour: int = 30
+
+    @property
+    def agents_actifs(self) -> bool:
+        return self.agents and bool(self.llm_cle)
 
 
 def _chemin(valeur: str) -> Path:
@@ -124,6 +137,14 @@ def charger_config() -> Config:
         heure_resume_soir=_heure(g("HEURE_RESUME_SOIR", "21")),
         heure_bilan_matin=_heure(g("HEURE_BILAN_MATIN", "8")),
         imap_idle=g("IMAP_IDLE", "1").strip() not in ("0", "non", "false", ""),
+        llm_url=(g("LLM_URL", "") or "https://api.groq.com/openai/v1").strip().rstrip("/"),
+        llm_modele=(g("LLM_MODELE", "") or "llama-3.3-70b-versatile").strip(),
+        llm_cle=g("LLM_CLE", "").strip(),
+        tavily_cle=g("TAVILY_CLE", "").strip(),
+        agents=g("AGENTS", "1").strip() not in ("0", "non", "false"),
+        agents_niveaux=frozenset(x.lower() for x in _liste(g("AGENTS_NIVEAUX", "vert,jaune"))),
+        llm_max_jour=int(g("LLM_MAX_JOUR", "300") or 300),
+        recherches_max_jour=int(g("RECHERCHES_MAX_JOUR", "30") or 30),
     )
 
 

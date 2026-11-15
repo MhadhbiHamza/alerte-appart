@@ -7,6 +7,7 @@ dans la base), dans les 3 heures qui suivent l'heure choisie : si le PC était �
 import logging
 from datetime import date, datetime, timedelta
 
+import ia
 import telegram
 from config import Config
 from stockage import Stockage
@@ -31,13 +32,18 @@ def _ligne_annonce(a) -> str:
             f'<a href="{e(a["lien"], True)}">voir</a>')
 
 
-def texte_stats(db: Stockage, maintenant: datetime) -> str:
+def texte_stats(db: Stockage, maintenant: datetime, cfg: Config = None) -> str:
     semaine, total = db.compter(_iso(maintenant - timedelta(days=7))), db.compter("")
     lignes = ["📊 <b>Statistiques</b>", "<code>              7 jours   total</code>"]
     for cle, nom in (("vues", "Annonces vues"), ("gardees", "Gardées"), ("vertes", "🟢 À saisir"),
                      ("jaunes", "🟡 Correctes"), ("rouges", "🔴 Bof"), ("envoyes", "Dossiers envoyés"),
                      ("postules", "Postulé site")):
         lignes.append(f"<code>{nom:<14}{semaine[cle]:>7}{total[cle]:>8}</code>")
+    lignes.append(f"<code>{'🤖 Rapports':<14}{db.nb_rapports(_iso(maintenant - timedelta(days=7))):>7}"
+                  f"{db.nb_rapports(''):>8}</code>")
+    if cfg is not None and cfg.agents_actifs:
+        lignes.append(f"\nAujourd'hui : IA {ia.utilise_aujourdhui(db, 'quota_llm')}/{cfg.llm_max_jour} · "
+                      f"recherches {ia.utilise_aujourdhui(db, 'quota_recherche')}/{cfg.recherches_max_jour}")
     return "\n".join(lignes)
 
 

@@ -29,8 +29,11 @@ from datetime import datetime
 
 import extraction
 import gmail
+import agents
 import bot
+import ia
 import modele
+import recherche
 import resumes
 import suivi
 import telegram
@@ -190,6 +193,10 @@ def boucle(cfg: Config, db: Stockage, une_fois: bool) -> None:
             threading.Thread(target=gmail.surveiller, daemon=True, name="imap-idle",
                              args=(cfg.gmail_adresse, cfg.gmail_mot_de_passe, cfg.dossier_imap,
                                    nouvel_email, arret)).start()
+        if cfg.agents_actifs:  # agents : évaluation, recherche du contact, canal (en arrière-plan)
+            agents.Travailleur(cfg, arret).start()
+            log.info("🤖 Agents actifs (%s, recherche %s).", cfg.llm_modele,
+                     "Tavily" if cfg.tavily_cle else "désactivée : TAVILY_CLE absente")
     try:
         _boucle(cfg, db, une_fois, prochain_cycle, reseau, nouvel_email)
     finally:
@@ -210,6 +217,12 @@ def _boucle(cfg: Config, db: Stockage, une_fois: bool, prochain_cycle: float, re
                 # Une coupure réseau ne doit pas arrêter l'outil : on réessaie au cycle suivant.
                 log.exception("Erreur pendant le cycle, nouvel essai dans %d s", cfg.intervalle_secondes)
             prochain_cycle = time.time() + cfg.intervalle_secondes
+        try:  # rapports terminés par les agents
+            bot.envoyer_rapports(cfg, db)
+        except ERREURS_RESEAU as exc:
+            reseau.erreur(exc)
+        except Exception:
+            log.exception("Erreur en envoyant un rapport d'agent")
         try:  # bilan du matin et résumé du soir, à l'heure prévue
             resumes.envoyer_programmes(cfg, db)
         except ERREURS_RESEAU as exc:
@@ -267,6 +280,22 @@ def commande_test(cfg: Config) -> None:
     print("✅ Modèle", cfg.fichier_modele.name, "lisible.")
     print("✅ Dossier PDF trouvé." if cfg.dossier_pdf.is_file()
           else f"⚠️  Dossier PDF introuvable : {cfg.dossier_pdf} (le bouton Postuler n'enverra rien)")
+    if not cfg.llm_cle:
+        print("ℹ️  Agents désactivés (LLM_CLE absente du .env).")
+    else:
+        try:
+            ia.discuter(cfg, [{"role": "user", "content": "Réponds seulement : OK"}])
+            print(f"✅ IA joignable ({cfg.llm_modele}).")
+        except ia.IAIndisponible as exc:
+            print(f"❌ IA : {exc}")
+        if not cfg.tavily_cle:
+            print("⚠️  Recherche web désactivée (TAVILY_CLE absente) : les agents ne chercheront pas les contacts.")
+        else:
+            try:
+                recherche.chercher(cfg, None, "agence immobilière Paris contact", n=1)
+                print("✅ Recherche web (Tavily) joignable.")
+            except recherche.RechercheIndisponible as exc:
+                print(f"❌ Recherche : {exc}")
 
 
 def commande_analyser(cfg: Config) -> None:

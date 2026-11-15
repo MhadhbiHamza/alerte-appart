@@ -5,6 +5,7 @@ Séparé de main.py (qui garde la boucle et la lecture des emails) pour rester l
 import hashlib
 import json
 import logging
+import re
 import time
 from datetime import datetime
 
@@ -24,13 +25,29 @@ log = logging.getLogger("alerte-appart")
 # Étapes 4-5 : message de candidature et notification Telegram avec boutons
 # --------------------------------------------------------------------------
 
+def rapport_agent(annonce) -> dict:
+    try:
+        return json.loads(annonce["agent_json"] or "{}")
+    except ValueError:
+        return {}
+
+
 def preparer_candidature(cfg: Config, annonce):
-    """Renvoie (objet, message) remplis à partir de templates.md."""
+    """Renvoie (objet, message) remplis à partir de templates.md.
+
+    Si un agent a écrit une accroche propre à l'annonce, elle remplace {accroche} dans le modèle,
+    ou se place juste après la première ligne (« Bonjour, »).
+    """
     valeurs = modele.valeurs_annonce(annonce)
     valeurs["mon_email"] = cfg.email_reponse or cfg.gmail_adresse  # pour votre signature
+    accroche = rapport_agent(annonce).get("accroche", "").strip()
+    valeurs["accroche"] = accroche
     objet, message = modele.charger(cfg.fichier_modele, colocation=bool(annonce["colocation"]))
+    if accroche and "{accroche}" not in message:
+        premiere, _, reste = message.partition("\n")
+        message = f"{premiere}\n\n{accroche}\n{reste}"
     objet = ("[ESSAI] " if annonce["essai"] else "") + modele.remplir(objet, valeurs)
-    return objet, modele.remplir(message, valeurs)
+    return objet, re.sub(r"\n{3,}", "\n\n", modele.remplir(message, valeurs))
 
 
 def destinataire(cfg: Config, annonce) -> str:
@@ -196,7 +213,19 @@ def notifier_annonces(cfg: Config, db: Stockage) -> None:
             log.info("Annonce #%d mise de côté (%s %s/5)", annonce["id"], resume.verdict, resume.note_globale)
             continue
         envoyer_carte(cfg, db, db.annonce(annonce["id"]), resume, silencieux=not resume.verdict.startswith("🟢"))
+        mettre_en_file_agent(cfg, db, db.annonce(annonce["id"]), resume)
         log.info("Notification envoyée pour l'annonce #%d (%s)", annonce["id"], resume.verdict)
+
+
+NIVEAUX = {"🟢": "vert", "🟡": "jaune", "🔴": "rouge"}
+
+
+def mettre_en_file_agent(cfg: Config, db: Stockage, annonce, resume) -> None:
+    """Confie l'annonce aux agents si elle est du bon niveau (AGENTS_NIVEAUX) et pas déjà traitée."""
+    if not cfg.agents_actifs or annonce["agent_etat"]:
+        return
+    if annonce["essai"] or NIVEAUX.get(resume.verdict[:1], "") in cfg.agents_niveaux:
+        db.maj(annonce["id"], agent_etat="en_attente")
 
 
 # --------------------------------------------------------------------------
@@ -253,6 +282,14 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
         telegram.modifier_texte(token, cfg.telegram_chat_id, message_clique, texte, clavier)
         telegram.repondre_clic(token, clic["id"])
         return
+    if action == "script":
+        script = rapport_agent(annonce).get("script_appel") or "Pas de script pour cette annonce."
+        telegram.envoyer(token, cfg.telegram_chat_id,
+                         f"📞 <b>Script d'appel</b> ({telegram.echapper(annonce['ville'] or '')}) :\n"
+                         f"<pre>{telegram.echapper(script)}</pre>\n<i>[PRÉSENTATION] : votre situation "
+                         "(CDI, revenus, garant), comme dans votre message.</i>", silencieux=True)
+        telegram.repondre_clic(token, clic["id"])
+        return
     if action == "message":
         _, message = preparer_candidature(cfg, annonce)
         telegram.envoyer(token, cfg.telegram_chat_id,
@@ -262,7 +299,9 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
         telegram.repondre_clic(token, clic["id"])
         return
     if action == "afficher":  # depuis le résumé du soir : la 🔴 mise de côté
-        envoyer_carte(cfg, db, annonce, analyser(cfg, db, annonce), silencieux=True)
+        resume = analyser(cfg, db, annonce)
+        envoyer_carte(cfg, db, annonce, resume, silencieux=True)
+        mettre_en_file_agent(cfg, db, db.annonce(annonce["id"]), resume)
         telegram.repondre_clic(token, clic["id"], "Annonce affichée.")
         return
 
@@ -271,7 +310,7 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
         return
 
     # --- Annonce suspecte : « Postuler » demande un 2e appui dans les 60 s ---
-    if action == "postuler" and not annonce["essai"]:
+    if action in ("postuler", "valider") and not annonce["essai"]:
         alertes = analyser(cfg, db, annonce).alertes_arnaque
         cle = f"confirmation:{annonce['id']}"
         if alertes and time.time() - float(db.lire_etat(cle, "0") or 0) > 60:
@@ -279,6 +318,24 @@ def traiter_clic(cfg: Config, db: Stockage, clic: dict) -> None:
             telegram.repondre_clic(token, clic["id"], "🚩 Annonce suspecte : " + ", ".join(alertes)
                                    + ". Appuyez encore sur Postuler dans les 60 s pour confirmer.", alerte=True)
             return
+
+    if action == "valider":  # l'agent a trouvé un email : vous validez, le dossier part
+        email = rapport_agent(annonce).get("contact", {}).get("email", "")
+        if not email and not annonce["essai"]:
+            telegram.repondre_clic(token, clic["id"], "Pas d'email trouvé par l'agent.")
+            return
+        if email:
+            db.maj(annonce["id"], email_contact=email)
+        ok, reponse = envoyer_dossier(cfg, db, db.annonce(annonce["id"]),
+                                      [message_clique, annonce["message_id"]])
+        telegram.repondre_clic(token, clic["id"], reponse, alerte=not ok)
+        return
+
+    if action == "appele":
+        _enregistrer(cfg, db, annonce, "appelé", "appel téléphonique")
+        _remplacer_boutons(cfg, [message_clique, annonce["message_id"]], "📞 Appelé")
+        telegram.repondre_clic(token, clic["id"], "Noté : vous avez appelé.")
+        return
 
     if action == "refuser":
         _enregistrer(cfg, db, annonce, "pas intéressé", "")
@@ -358,7 +415,7 @@ def traiter_commande(cfg: Config, db: Stockage, texte: str) -> None:
         db.ecrire_etat("pause", "")
         reponse = "▶️ C'est reparti : je lis les alertes reçues pendant la pause."
     elif commande == "stats":
-        reponse = resumes.texte_stats(db, datetime.now())
+        reponse = resumes.texte_stats(db, datetime.now(), cfg)
     elif commande == "suivi":
         reponse = resumes.texte_suivi(db)
     elif commande == "csv":
@@ -451,7 +508,8 @@ def _supprimer_messages(cfg: Config, annonce, message_clique) -> bool:
         album = json.loads(annonce["album_ids"] or "[]")
     except ValueError:
         album = []
-    a_supprimer = dict.fromkeys(m for m in [message_clique, annonce["message_id"], *album] if m)
+    a_supprimer = dict.fromkeys(m for m in [message_clique, annonce["message_id"], annonce["agent_message_id"],
+                                            *album] if m)
     reussi = False
     for message_id in a_supprimer:
         try:
@@ -466,3 +524,70 @@ def _date(iso: str) -> str:
     return datetime.fromisoformat(iso).strftime("%d/%m à %H:%M")
 
 
+
+
+# --------------------------------------------------------------------------
+# Rapports des agents
+# --------------------------------------------------------------------------
+
+def texte_rapport(cfg: Config, annonce, r: dict) -> str:
+    e = telegram.echapper
+    ev, contact = r.get("evaluation", {}), r.get("contact", {})
+    reco = {"candidater": "✅ candidater", "a_verifier": "🔎 à vérifier", "passer": "⛔ passer"}
+    lignes = [f"🤖 <b>Rapport de l'agent</b> — intérêt {ev.get('interet', '?')}/5 · "
+              f"{reco.get(ev.get('recommandation'), '?')}"]
+    if ev.get("synthese"):
+        lignes.append(e(ev["synthese"]))
+    if ev.get("points_forts"):
+        lignes.append("👍 " + e(" · ".join(ev["points_forts"])))
+    if ev.get("risques"):
+        lignes.append("⚠️ " + e(" · ".join(ev["risques"])))
+    if ev.get("questions_visite"):
+        lignes.append("❓ À demander : " + e(" · ".join(ev["questions_visite"])))
+    lignes.append("")
+    if contact.get("email") or contact.get("telephone"):
+        qui = f" ({e(contact['agence'])})" if contact.get("agence") else ""
+        lignes.append(f"📇 <b>Contact trouvé</b>{qui} :")
+        if contact.get("email"):
+            lignes.append(f"✉️ {e(contact['email'])}")
+        if contact.get("telephone"):
+            lignes.append(f"📞 {e(contact['telephone'])}")
+        if contact.get("source_url", "").startswith("http"):
+            lignes.append(f'<a href="{e(contact["source_url"], True)}">source</a> · '
+                          f"confiance {round(contact.get('confiance', 0) * 100)} %")
+    else:
+        lignes.append("📇 Aucun contact trouvé" + (f" ({e(contact['raison'])})" if contact.get("raison") else "."))
+    canal = r.get("canal", "formulaire")
+    libelle = {"email": "✉️ email", "appel": "📞 appel", "formulaire": "🌐 formulaire du site"}[canal]
+    lignes.append(f"\n➡️ <b>Canal conseillé : {libelle}</b>" + (f" — {e(r['raison'])}" if r.get("raison") else ""))
+    if canal == "email":
+        lignes.append(f"<i>« Valider » envoie votre message (avec l'accroche de l'agent) et votre dossier à "
+                      f"{e(destinataire(cfg, annonce) or contact.get('email', ''))}.</i>")
+    return "\n".join(lignes)[:telegram.LIMITE]
+
+
+def boutons_rapport(annonce, r: dict) -> telegram.Boutons:
+    d = lambda action: donnee_bouton(annonce, action)  # noqa: E731
+    canal, contact = r.get("canal"), r.get("contact", {})
+    lien = [[("🔗 Ouvrir l'annonce", annonce["lien"])]] if (annonce["lien"] or "").startswith("http") else []
+    if canal == "email":
+        return [[(f"✅ Valider l'envoi à {contact.get('email', '')}"[:60], d("valider"))],
+                [("👀 Voir le message", d("message")), ("❌ Pas intéressé", d("refuser"))]] + lien
+    if canal == "appel":
+        return [[("📞 Script d'appel", d("script")), ("✅ J'ai appelé", d("appele"))],
+                [("📋 Message", d("message")), ("❌ Pas intéressé", d("refuser"))]] + lien
+    return lien + [[("📋 Message", d("message")), ("🌐 Déjà postulé", d("site"))],
+                   [("❌ Pas intéressé", d("refuser"))]]
+
+
+def envoyer_rapports(cfg: Config, db: Stockage) -> None:
+    """Envoie, en réponse à chaque carte, les rapports que les agents ont terminés."""
+    for annonce in db.rapports_prets():
+        r = rapport_agent(annonce)
+        if annonce["statut"] or annonce["envoye_le"]:  # décision déjà prise entre-temps
+            db.maj(annonce["id"], agent_etat="fini")
+            continue
+        message_id = telegram.envoyer(cfg.telegram_token, cfg.telegram_chat_id, texte_rapport(cfg, annonce, r),
+                                      boutons=boutons_rapport(annonce, r), silencieux=True,
+                                      repondre_a=annonce["message_id"])
+        db.maj(annonce["id"], agent_etat="fini", agent_message_id=message_id)

@@ -65,7 +65,8 @@ def _clavier(boutons: Boutons) -> dict:
 
 
 def envoyer(token: str, chat_id: str, texte_html: str,
-            boutons: Optional[Boutons] = None, apercu: Optional[str] = None, silencieux: bool = False) -> int:
+            boutons: Optional[Boutons] = None, apercu: Optional[str] = None, silencieux: bool = False,
+            repondre_a: Optional[int] = None) -> int:
     """Envoie un message (HTML de Telegram : <b>, <a>, <pre>…) et renvoie son numéro.
 
     apercu : adresse d'une image (ou de l'annonce) affichée en grand au-dessus du texte.
@@ -79,6 +80,8 @@ def envoyer(token: str, chat_id: str, texte_html: str,
         donnees["link_preview_options"] = {"is_disabled": True}
     if boutons:
         donnees["reply_markup"] = _clavier(boutons)
+    if repondre_a:  # affiché comme une réponse à ce message (ex. rapport d'agent sous l'annonce)
+        donnees["reply_parameters"] = {"message_id": repondre_a, "allow_sending_without_reply": True}
     return _appel(token, "sendMessage", donnees)["message_id"]
 
 

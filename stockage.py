@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS annonces (
     note                REAL,                  -- note globale sur 5
     essai               INTEGER DEFAULT 0,     -- 1 = annonce notifiée pour essayer (envois vers vous)
     album_ids           TEXT,                  -- numéros des messages photos (pour les supprimer)
-    differee            INTEGER DEFAULT 0      -- 1 = 🔴 mise de côté pour le résumé du soir
+    differee            INTEGER DEFAULT 0,     -- 1 = 🔴 mise de côté pour le résumé du soir
+    agent_etat          TEXT,                  -- agents : en_attente / en_cours / pret / fini / erreur
+    agent_json          TEXT,                  -- rapport des agents
+    agent_message_id    INTEGER                -- message Telegram du rapport
 );
 CREATE TABLE IF NOT EXISTS etat (              -- petites valeurs à retenir entre deux lancements
     cle    TEXT PRIMARY KEY,
@@ -64,9 +67,11 @@ NOUVELLES_COLONNES = {
     "message_id": "INTEGER", "statut": "TEXT", "candidature": "TEXT", "envoye_le": "TEXT",
     "texte": "TEXT", "photos": "TEXT", "verdict": "TEXT", "note": "REAL", "essai": "INTEGER DEFAULT 0",
     "album_ids": "TEXT", "differee": "INTEGER DEFAULT 0",
+    "agent_etat": "TEXT", "agent_json": "TEXT", "agent_message_id": "INTEGER",
 }
 CHAMPS_MODIFIABLES = {"notifiee_le", "message_id", "statut", "candidature", "envoye_le", "brouillon", "verdict", "note",
-                      "album_ids", "email_contact", "differee"}
+                      "album_ids", "email_contact", "differee", "agent_etat", "agent_json",
+                      "agent_message_id"}
 
 
 def maintenant() -> str:
@@ -75,7 +80,8 @@ def maintenant() -> str:
 
 class Stockage:
     def __init__(self, chemin: Path):
-        self.db = sqlite3.connect(str(chemin))
+        # timeout : le fil des agents écrit aussi dans la base, on attend au lieu d'échouer.
+        self.db = sqlite3.connect(str(chemin), timeout=30)
         self.db.row_factory = sqlite3.Row  # accès aux colonnes par leur nom
         self.db.executescript(SCHEMA)
         # Mise à jour d'une base créée par une version précédente de l'outil.
@@ -148,6 +154,13 @@ class Stockage:
         return self.db.execute(
             "SELECT * FROM annonces WHERE retenue=1 AND differee=0 AND essai=0 AND notifiee_le IS NOT NULL "
             "AND notifiee_le < ? AND statut IS NULL AND envoye_le IS NULL ORDER BY id", (avant,)).fetchall()
+
+    def rapports_prets(self) -> List[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM annonces WHERE agent_etat='pret' ORDER BY id").fetchall()
+
+    def nb_rapports(self, depuis: str) -> int:
+        return self.db.execute("SELECT COUNT(*) FROM annonces WHERE agent_etat='fini' AND notifiee_le >= ?",
+                               (depuis,)).fetchone()[0]
 
     def en_cours(self) -> List[sqlite3.Row]:
         """Candidatures en cours : dossier envoyé, postulé ou brouillon (hors essais)."""
